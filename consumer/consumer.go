@@ -46,7 +46,7 @@ func (consumer *StateSyncerConsumer) InitializeAndRun(stateChangeFileName string
 		return err
 	}
 	// If there are entries to read, run an initial scan of the index file.
-	if err.Error() != "EOF" {
+	if err == nil || err.Error() != "EOF" {
 		err = consumer.run()
 	}
 	// Create a watcher to handle any new writes to the state change file.
