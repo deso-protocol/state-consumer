@@ -1,4 +1,4 @@
-module consumer
+module state-consumer
 
 go 1.18
 
