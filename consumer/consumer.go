@@ -132,7 +132,8 @@ func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() error {
 				}
 				log.Println("event:", event)
 				if event.Op&fsnotify.Write == fsnotify.Write {
-					fmt.Printf("File modified. Scanning for state changes.\n")
+					fmt.Println("File modified. Scanning for state changes.")
+					fmt.Printf("IsScanning: %v\n", consumer.IsScanning)
 					// Don't start scanning if we're already scanning.
 					if !consumer.IsScanning {
 						fmt.Println("Starting scan.")
@@ -246,13 +247,17 @@ func (consumer *StateSyncerConsumer) readNextEntryFromFile() (bool, error) {
 
 func (consumer *StateSyncerConsumer) run() error {
 	fileEOF := false
+	fmt.Println("Before File EOF")
 	for !fileEOF {
 		var err error
 		fileEOF, err = consumer.readNextEntryFromFile()
 		if err != nil {
+			fmt.Println("Err != nil")
+			consumer.IsScanning = false
 			return err
 		}
 	}
+	fmt.Println("Is Scanning = false")
 	consumer.IsScanning = false
 	return consumer.end()
 }

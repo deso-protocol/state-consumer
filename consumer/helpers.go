@@ -34,10 +34,16 @@ func CopyStruct(src interface{}, dst interface{}) error {
 		srcField := srcValue.FieldByName(dstFieldName)
 		dstField := dstValue.FieldByName(dstFieldName)
 
+		// TODO: Break each of these out into their own functions.
 		// If the field needs to be decoded in some way, handle that here.
 		if dstFieldDecodeFunction == "blockhash" {
 			if srcValue.FieldByName(dstFieldDecodeSrcField).IsValid() && srcValue.FieldByName(dstFieldDecodeSrcField).Elem().IsValid() {
 				postHashBytes := srcValue.FieldByName(dstFieldDecodeSrcField).Elem().Slice(0, lib.HashSizeBytes).Bytes()
+				dstValue.FieldByName(dstFieldName).SetString(hex.EncodeToString(postHashBytes))
+			}
+		} else if dstFieldDecodeFunction == "bytehash" {
+			if srcValue.FieldByName(dstFieldDecodeSrcField).IsValid() {
+				postHashBytes := srcValue.FieldByName(dstFieldDecodeSrcField).Slice(0, lib.HashSizeBytes).Bytes()
 				dstValue.FieldByName(dstFieldName).SetString(hex.EncodeToString(postHashBytes))
 			}
 		} else if dstFieldDecodeFunction == "deso_body_schema" {
