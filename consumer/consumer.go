@@ -48,8 +48,10 @@ func (consumer *StateSyncerConsumer) InitializeAndRun(stateChangeFileName string
 	// If there are entries to read, run an initial scan of the index file.
 	if err == nil || err.Error() != "EOF" {
 		err = consumer.run()
+		if err != nil {
+			return err
+		}
 	} else {
-		consumer.IsScanning = false
 	}
 	// Create a watcher to handle any new writes to the state change file.
 	err = consumer.watchFileAndScanOnWrite()
@@ -63,7 +65,7 @@ func (consumer *StateSyncerConsumer) InitializeAndRun(stateChangeFileName string
 // parsing at.
 func (consumer *StateSyncerConsumer) initialize(stateChangeFileName string, stateChangeIndexFileName string, consumerProgressFilename string, processInBatches bool, batchSize int, handler StateSyncerDataHandler) error {
 	// Set up the data handler initial values.
-	consumer.IsScanning = true
+	consumer.IsScanning = false
 	consumer.IsHypersyncing = false
 	consumer.ProcessEntriesInBatches = processInBatches
 	consumer.BatchCount = 0
@@ -248,6 +250,7 @@ func (consumer *StateSyncerConsumer) readNextEntryFromFile() (bool, error) {
 func (consumer *StateSyncerConsumer) run() error {
 	fileEOF := false
 	fmt.Println("Before File EOF")
+	consumer.IsScanning = true
 	for !fileEOF {
 		var err error
 		fileEOF, err = consumer.readNextEntryFromFile()
