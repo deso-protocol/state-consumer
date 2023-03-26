@@ -48,6 +48,8 @@ func (consumer *StateSyncerConsumer) InitializeAndRun(stateChangeFileName string
 	// If there are entries to read, run an initial scan of the index file.
 	if err == nil || err.Error() != "EOF" {
 		err = consumer.run()
+	} else {
+		consumer.IsScanning = false
 	}
 	// Create a watcher to handle any new writes to the state change file.
 	err = consumer.watchFileAndScanOnWrite()
@@ -131,9 +133,9 @@ func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() error {
 				log.Println("event:", event)
 				if event.Op&fsnotify.Write == fsnotify.Write {
 					fmt.Printf("File modified. Scanning for state changes.\n")
-					consumer.StateChangeFile, _ = os.Open(consumer.StateChangeFileName)
 					// Don't start scanning if we're already scanning.
 					if !consumer.IsScanning {
+						fmt.Println("Starting scan.")
 						consumer.run()
 					}
 				}
