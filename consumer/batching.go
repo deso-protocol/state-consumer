@@ -35,7 +35,6 @@ func (consumer *StateSyncerConsumer) HandleEntryOperationBatch(key []byte, encod
 		})
 		return nil
 	} else if consumer.BatchedEntries != nil && len(consumer.BatchedEntries.Entries) > 0 {
-		fmt.Printf("Batched entries: %+v\n", consumer.BatchedEntries)
 		// If the batched entries do exist, but the batched encoder type and db operation don't match, or the max
 		// batched size has been reached, then do the insert/upsert/delete.
 		err := consumer.DataHandler.HandleEntryBatch(consumer.BatchedEntries)

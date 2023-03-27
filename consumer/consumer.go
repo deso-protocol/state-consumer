@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/deso-protocol/core/lib"
 	"os"
-	"sync"
 	"time"
 )
 
@@ -66,6 +65,7 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeFileName string, stat
 	consumer.BatchCount = 0
 	consumer.EntryCount = 0
 	consumer.MaxBatchSize = batchSize
+	consumer.DataHandler = handler
 
 	// Open the state changes file
 	consumer.StateChangeFileName = stateChangeFileName
@@ -97,53 +97,12 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeFileName string, stat
 
 	consumer.StateChangeFile.Seek(int64(stateChangeFileByteIndex), 0)
 
-	consumer.DataHandler = handler
-
 	// If the byte index is 0, we are starting a fresh sync.
 	if stateChangeFileByteIndex == 0 {
 		consumer.DataHandler.HandleSyncEvent(SyncEventStart)
 	}
 
 	return nil
-}
-
-type Mutex struct {
-	lock    sync.Mutex
-	cond    *sync.Cond
-	held    bool
-	waiting int
-}
-
-func NewMutex() *Mutex {
-	m := &Mutex{
-		cond: sync.NewCond(&sync.Mutex{}),
-	}
-	return m
-}
-
-func (m *Mutex) Lock() {
-	m.lock.Lock()
-	defer m.lock.Unlock()
-
-	// If the mutex is already held, and there's at least one process waiting,
-	// just return without waiting.
-	for m.held || m.waiting > 0 {
-		m.waiting++
-		m.cond.Wait()
-		m.waiting--
-	}
-
-	m.held = true
-}
-
-func (m *Mutex) Unlock() {
-	m.lock.Lock()
-	defer m.lock.Unlock()
-
-	m.held = false
-
-	// Signal the condition variable to wake up any waiting processes.
-	m.cond.Signal()
 }
 
 func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() error {
@@ -408,6 +367,7 @@ func (consumer *StateSyncerConsumer) cleanup() error {
 		handledEntries := len(UniqueEntries(consumer.BatchedEntries.Entries))
 		fmt.Printf("Handled batch %d\n", consumer.BatchCount)
 		consumer.BatchCount += 1
+		consumer.BatchedEntries = nil
 		return consumer.saveConsumerProgressToFile(consumer.LastScannedIndex + uint32(handledEntries))
 	}
 	return nil
