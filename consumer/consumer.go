@@ -4,11 +4,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"github.com/deso-protocol/core/lib"
-	"github.com/fsnotify/fsnotify"
-	"github.com/golang/glog"
-	"log"
 	"os"
 	"sync"
+	"time"
 )
 
 type StateSyncerConsumer struct {
@@ -31,8 +29,6 @@ type StateSyncerConsumer struct {
 	// The maximum number of entries to batch before inserting into the database.
 	MaxBatchSize int
 
-	// Track whether we're actively consuming or not.
-	IsScanning bool
 	// Track whether we're currently hypersyncing
 	IsHypersyncing bool
 	// A counter to keep track of how many batches have been inserted.
@@ -52,7 +48,6 @@ func (consumer *StateSyncerConsumer) InitializeAndRun(stateChangeFileName string
 		if err != nil {
 			return err
 		}
-	} else {
 	}
 	// Create a watcher to handle any new writes to the state change file.
 	err = consumer.watchFileAndScanOnWrite()
@@ -66,7 +61,6 @@ func (consumer *StateSyncerConsumer) InitializeAndRun(stateChangeFileName string
 // parsing at.
 func (consumer *StateSyncerConsumer) initialize(stateChangeFileName string, stateChangeIndexFileName string, consumerProgressFilename string, processInBatches bool, batchSize int, handler StateSyncerDataHandler) error {
 	// Set up the data handler initial values.
-	consumer.IsScanning = false
 	consumer.IsHypersyncing = false
 	consumer.ProcessEntriesInBatches = processInBatches
 	consumer.BatchCount = 0
@@ -98,10 +92,6 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeFileName string, stat
 
 	stateChangeFileByteIndex, err := consumer.retrieveFileIndexForDbOperation()
 	if err != nil {
-		if err.Error() == "EOF" {
-			consumer.end()
-			return err
-		}
 		return err
 	}
 
@@ -158,69 +148,87 @@ func (m *Mutex) Unlock() {
 
 func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() error {
 	// Create new watcher.
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer watcher.Close()
+	//watcher, err := fsnotify.NewWatcher()
+	//if err != nil {
+	//	log.Fatal(err)
+	//}
+	//defer watcher.Close()
+	//
+	//mutex := &sync.Mutex{}
+	//
+	//var running bool
+	//
+	//// Start listening for events.
+	//go func() {
+	//	for {
+	//		select {
+	//		case event, ok := <-watcher.Events:
+	//			if !ok {
+	//				return
+	//			}
+	//			log.Println("event:", event)
+	//			if event.Op&fsnotify.Write == fsnotify.Write {
+	//				fmt.Println("File modified. Scanning for state changes.")
+	//				// Try to acquire the mutex to check whether `consumer.run()` is currently running.
+	//				mutex.Lock()
+	//				if running {
+	//					fmt.Println("Already running")
+	//					// `consumer.run()` is already running, so we don't need to start another instance.
+	//					mutex.Unlock()
+	//					break
+	//				}
+	//				// Set the `running` flag to true and release the mutex.
+	//				fmt.Println("Set running to true")
+	//				running = true
+	//				mutex.Unlock()
+	//
+	//				// Run `consumer.run()` and release the `running` flag when it's done.
+	//				err = consumer.run()
+	//				fmt.Println("Run complete")
+	//				if err != nil {
+	//					fmt.Printf("Error: %v", err)
+	//					glog.Fatalf("Error running scan: %v", err)
+	//				}
+	//				mutex.Lock()
+	//				fmt.Println("Re-set to false")
+	//				running = false
+	//				mutex.Unlock()
+	//			}
+	//		case err, ok := <-watcher.Errors:
+	//			if !ok {
+	//				return
+	//			}
+	//			glog.Fatalf("Error watching file: %v", err)
+	//		}
+	//	}
+	//}()
+	//
+	//// Add a path.
+	//err = watcher.Add(consumer.StateChangeFileName)
+	//if err != nil {
+	//	return err
+	//}
+	//
+	//// Block main goroutine forever.
+	//<-make(chan struct{})
+	//fmt.Printf("Done watching file.\n")
+	//err = consumer.end()
+	//if err != nil {
+	//	glog.Fatalf("Error closing files: %v", err)
+	//}
+	//return nil
 
-	mutex := NewMutex()
-	var running bool
-
-	// Start listening for events.
-	go func() {
-		for {
-			select {
-			case event, ok := <-watcher.Events:
-				if !ok {
-					return
-				}
-				log.Println("event:", event)
-				if event.Op&fsnotify.Write == fsnotify.Write {
-					fmt.Println("File modified. Scanning for state changes.")
-					// Try to acquire the mutex to check whether `consumer.run()` is currently running.
-					mutex.Lock()
-					if running {
-						fmt.Println("Already running")
-						// `consumer.run()` is already running, so we don't need to start another instance.
-						mutex.Unlock()
-						break
-					}
-					// Set the `running` flag to true and release the mutex.
-					fmt.Println("Set running to true")
-					running = true
-					mutex.Unlock()
-
-					// Run `consumer.run()` and release the `running` flag when it's done.
-					err = consumer.run()
-					fmt.Println("Run complete")
-					if err != nil {
-						fmt.Printf("Error: %v", err)
-						glog.Fatalf("Error running scan: %v", err)
-					}
-					mutex.Lock()
-					fmt.Println("Re-set to false")
-					running = false
-					mutex.Unlock()
-				}
-			case err, ok := <-watcher.Errors:
-				if !ok {
-					return
-				}
-				glog.Fatalf("Error watching file: %v", err)
-			}
+	for {
+		time.Sleep(500 * time.Millisecond)
+		err := consumer.run()
+		if err != nil {
+			return err
 		}
-	}()
-
-	// Add a path.
-	err = watcher.Add(consumer.StateChangeFileName)
+	}
+	err := consumer.end()
 	if err != nil {
 		return err
 	}
-
-	// Block main goroutine forever.
-	<-make(chan struct{})
-	fmt.Printf("Done watching file.\n")
 	return nil
 }
 
@@ -311,19 +319,15 @@ func (consumer *StateSyncerConsumer) readNextEntryFromFile() (bool, error) {
 func (consumer *StateSyncerConsumer) run() error {
 	fileEOF := false
 	fmt.Println("Before File EOF")
-	consumer.IsScanning = true
 	for !fileEOF {
 		var err error
 		fileEOF, err = consumer.readNextEntryFromFile()
 		if err != nil {
 			fmt.Println("Err != nil")
-			consumer.IsScanning = false
 			return err
 		}
 	}
-	fmt.Println("Is Scanning = false")
-	consumer.IsScanning = false
-	return consumer.end()
+	return consumer.cleanup()
 }
 
 func (consumer *StateSyncerConsumer) end() error {
