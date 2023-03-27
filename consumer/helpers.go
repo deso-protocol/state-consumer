@@ -37,13 +37,15 @@ func CopyStruct(src interface{}, dst interface{}) error {
 		// TODO: Break each of these out into their own functions.
 		// If the field needs to be decoded in some way, handle that here.
 		if dstFieldDecodeFunction == "blockhash" {
-			if srcValue.FieldByName(dstFieldDecodeSrcField).IsValid() && srcValue.FieldByName(dstFieldDecodeSrcField).Elem().IsValid() {
-				postHashBytes := srcValue.FieldByName(dstFieldDecodeSrcField).Elem().Slice(0, lib.HashSizeBytes).Bytes()
+			fieldValue := srcValue.FieldByName(dstFieldDecodeSrcField)
+			if fieldValue.IsValid() && fieldValue.Elem().IsValid() {
+				postHashBytes := fieldValue.Elem().Slice(0, lib.HashSizeBytes).Bytes()
 				dstValue.FieldByName(dstFieldName).SetString(hex.EncodeToString(postHashBytes))
 			}
 		} else if dstFieldDecodeFunction == "bytehash" {
-			if srcValue.FieldByName(dstFieldDecodeSrcField).IsValid() {
-				postHashBytes := srcValue.FieldByName(dstFieldDecodeSrcField).Slice(0, lib.HashSizeBytes).Bytes()
+			fieldValue := srcValue.FieldByName(dstFieldDecodeSrcField)
+			if fieldValue.IsValid() && fieldValue.Len() > 0 {
+				postHashBytes := fieldValue.Slice(0, lib.HashSizeBytes).Bytes()
 				dstValue.FieldByName(dstFieldName).SetString(hex.EncodeToString(postHashBytes))
 			}
 		} else if dstFieldDecodeFunction == "deso_body_schema" {
@@ -59,9 +61,10 @@ func CopyStruct(src interface{}, dst interface{}) error {
 			dstValue.FieldByName(dstValue.Type().Field(i).Tag.Get("decode_image_urls_field_name")).Set(reflect.ValueOf(body.ImageURLs))
 			dstValue.FieldByName(dstValue.Type().Field(i).Tag.Get("decode_video_urls_field_name")).Set(reflect.ValueOf(body.VideoURLs))
 		} else if dstFieldDecodeFunction == "base_58_check" {
-			if srcValue.FieldByName(dstFieldDecodeSrcField).IsValid() {
+			fieldValue := srcValue.FieldByName(dstFieldDecodeSrcField)
+			if fieldValue.IsValid() {
 				// If syncing against testnet, these params should be changed.
-				pkString := lib.PkToString(srcValue.FieldByName(dstFieldDecodeSrcField).Bytes(), &lib.DeSoMainnetParams)
+				pkString := lib.PkToString(fieldValue.Bytes(), &lib.DeSoMainnetParams)
 				dstValue.FieldByName(dstFieldName).SetString(pkString)
 			}
 		} else if dstFieldDecodeFunction == "extra_data" {

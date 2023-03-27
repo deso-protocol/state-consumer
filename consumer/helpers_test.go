@@ -39,9 +39,10 @@ func TestCopyStruct(t *testing.T) {
 	bodyBytes, err := json.Marshal(postBody)
 
 	struct1 := &lib.PostEntry{
-		TimestampNanos:  uint64(time.Now().UnixNano()),
-		PostHash:        blockHash,
-		ParentStakeID:   blockHash.ToBytes(),
+		TimestampNanos: uint64(time.Now().UnixNano()),
+		PostHash:       blockHash,
+		ParentStakeID:  blockHash.ToBytes(),
+		//ParentStakeID:   []byte{},
 		Body:            bodyBytes,
 		PosterPublicKey: []byte{2, 57, 123, 26, 128, 235, 160, 166, 6, 68, 101, 10, 241, 60, 42, 111, 253, 251, 191, 56, 131, 12, 175, 195, 73, 55, 167, 93, 221, 68, 184, 206, 82},
 	}
