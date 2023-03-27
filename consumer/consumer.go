@@ -8,6 +8,7 @@ import (
 	"github.com/golang/glog"
 	"log"
 	"os"
+	"sync"
 )
 
 type StateSyncerConsumer struct {
@@ -116,6 +117,45 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeFileName string, stat
 	return nil
 }
 
+type Mutex struct {
+	lock    sync.Mutex
+	cond    *sync.Cond
+	held    bool
+	waiting int
+}
+
+func NewMutex() *Mutex {
+	m := &Mutex{
+		cond: sync.NewCond(&sync.Mutex{}),
+	}
+	return m
+}
+
+func (m *Mutex) Lock() {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	// If the mutex is already held, and there's at least one process waiting,
+	// just return without waiting.
+	for m.held || m.waiting > 0 {
+		m.waiting++
+		m.cond.Wait()
+		m.waiting--
+	}
+
+	m.held = true
+}
+
+func (m *Mutex) Unlock() {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	m.held = false
+
+	// Signal the condition variable to wake up any waiting processes.
+	m.cond.Signal()
+}
+
 func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() error {
 	// Create new watcher.
 	watcher, err := fsnotify.NewWatcher()
@@ -123,6 +163,9 @@ func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() error {
 		log.Fatal(err)
 	}
 	defer watcher.Close()
+
+	mutex := NewMutex()
+	var running bool
 
 	// Start listening for events.
 	go func() {
@@ -135,12 +178,30 @@ func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() error {
 				log.Println("event:", event)
 				if event.Op&fsnotify.Write == fsnotify.Write {
 					fmt.Println("File modified. Scanning for state changes.")
-					fmt.Printf("IsScanning: %v\n", consumer.IsScanning)
-					// Don't start scanning if we're already scanning.
-					if !consumer.IsScanning {
-						fmt.Println("Starting scan.")
-						consumer.run()
+					// Try to acquire the mutex to check whether `consumer.run()` is currently running.
+					mutex.Lock()
+					if running {
+						fmt.Println("Already running")
+						// `consumer.run()` is already running, so we don't need to start another instance.
+						mutex.Unlock()
+						break
 					}
+					// Set the `running` flag to true and release the mutex.
+					fmt.Println("Set running to true")
+					running = true
+					mutex.Unlock()
+
+					// Run `consumer.run()` and release the `running` flag when it's done.
+					err = consumer.run()
+					fmt.Println("Run complete")
+					if err != nil {
+						fmt.Printf("Error: %v", err)
+						glog.Fatalf("Error running scan: %v", err)
+					}
+					mutex.Lock()
+					fmt.Println("Re-set to false")
+					running = false
+					mutex.Unlock()
 				}
 			case err, ok := <-watcher.Errors:
 				if !ok {
