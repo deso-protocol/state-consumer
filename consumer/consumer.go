@@ -335,11 +335,14 @@ func (consumer *StateSyncerConsumer) saveConsumerProgressToFile(entryIndex uint3
 func (consumer *StateSyncerConsumer) cleanup() error {
 	// If there are still bulk operations to perform, perform them now.
 	if consumer.ProcessEntriesInBatches && consumer.BatchedEntries != nil && len(consumer.BatchedEntries.Entries) > 0 {
+		// TODO: Reduce re-used code here.
 		err := consumer.DataHandler.HandleEntryBatch(consumer.BatchedEntries)
 		if err != nil {
 			return err
 		}
 		handledEntries := len(UniqueEntries(consumer.BatchedEntries.Entries))
+		fmt.Printf("Handled batch %d\n", consumer.BatchCount)
+		consumer.BatchCount += 1
 		return consumer.saveConsumerProgressToFile(consumer.LastScannedIndex + uint32(handledEntries))
 	}
 	return nil
