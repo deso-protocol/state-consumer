@@ -1,17 +1,21 @@
 package consumer
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
 	"github.com/deso-protocol/core/lib"
+	"github.com/pkg/errors"
+	"io"
 	"os"
 	"time"
 )
 
 type StateSyncerConsumer struct {
 	// File that contains the state changes.
-	StateChangeFile     *os.File
-	StateChangeFileName string
+	StateChangeFile       *os.File
+	StateChangeFileName   string
+	StateChangeFileReader *bufio.Reader
 	// File that contains the byte indexes of the state change file that corresponds to db operations.
 	StateChangeIndexFile     *os.File
 	StateChangeIndexFileName string
@@ -24,7 +28,7 @@ type StateSyncerConsumer struct {
 	DataHandler             StateSyncerDataHandler
 	ProcessEntriesInBatches bool
 	// An object that contains the state changes that have been parsed but not yet processed. Used for batching.
-	BatchedEntries *BatchedEntries
+	BatchedEntries []*lib.StateChangeEntry
 	// The maximum number of entries to batch before inserting into the database.
 	MaxBatchSize int
 
@@ -39,19 +43,17 @@ func (consumer *StateSyncerConsumer) InitializeAndRun(stateChangeFileName string
 	// initialize the consumer
 	err := consumer.initialize(stateChangeFileName, stateChangeIndexFileName, consumerProgressFilename, processInBatches, batchSize, handler)
 	if err != nil && err.Error() != "EOF" {
-		return err
+		return errors.Wrapf(err, "consumer.InitializeAndRun: Error initializing consumer")
 	}
 	// If there are entries to read, run an initial scan of the index file.
 	if err == nil || err.Error() != "EOF" {
-		err = consumer.run()
-		if err != nil {
-			return err
+		if err = consumer.run(); err != nil {
+			return errors.Wrapf(err, "consumer.InitializeAndRun: Error running consumer")
 		}
 	}
 	// Create a watcher to handle any new writes to the state change file.
-	err = consumer.watchFileAndScanOnWrite()
-	if err != nil {
-		return err
+	if err = consumer.watchFileAndScanOnWrite(); err != nil {
+		return errors.Wrapf(err, "consumer.InitializeAndRun: Error watching file")
 	}
 	return nil
 }
@@ -71,28 +73,28 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeFileName string, stat
 	consumer.StateChangeFileName = stateChangeFileName
 	stateChangeFile, err := os.Open(stateChangeFileName)
 	if err != nil {
-		return fmt.Errorf("Error opening stateChangeFile: %w", err)
+		return errors.Wrapf(err, "consumer.initialize: Error opening stateChangeFile")
 	}
 	consumer.StateChangeFile = stateChangeFile
+	consumer.StateChangeFileReader = bufio.NewReader(stateChangeFile)
 
 	// Open the file that contains byte indexes for each entry in the state changes file.
 	consumer.StateChangeIndexFileName = stateChangeIndexFileName
 	indexFile, err := os.Open(stateChangeIndexFileName)
 	if err != nil {
-		return fmt.Errorf("Error opening indexFile: %w", err)
+		return errors.Wrapf(err, "consumer.initialize: Error opening indexFile")
 	}
 	consumer.StateChangeIndexFile = indexFile
 
 	// Open the file that contains the entry index of the last saved state change.
 	consumer.ConsumerProgressFileName = consumerProgressFilename
-	startEntryIndexFile, err := os.Open(consumerProgressFilename)
-	if err == nil {
+	if startEntryIndexFile, err := os.Open(consumerProgressFilename); err == nil {
 		consumer.ConsumerProgressFile = startEntryIndexFile
 	}
 
 	stateChangeFileByteIndex, err := consumer.retrieveFileIndexForDbOperation()
 	if err != nil {
-		return err
+		return errors.Wrapf(err, "consumer.intialize: Error retrieving file index for db operation")
 	}
 
 	consumer.StateChangeFile.Seek(int64(stateChangeFileByteIndex), 0)
@@ -106,184 +108,96 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeFileName string, stat
 }
 
 func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() error {
-	// Create new watcher.
-	//watcher, err := fsnotify.NewWatcher()
-	//if err != nil {
-	//	log.Fatal(err)
-	//}
-	//defer watcher.Close()
-	//
-	//mutex := &sync.Mutex{}
-	//
-	//var running bool
-	//
-	//// Start listening for events.
-	//go func() {
-	//	for {
-	//		select {
-	//		case event, ok := <-watcher.Events:
-	//			if !ok {
-	//				return
-	//			}
-	//			log.Println("event:", event)
-	//			if event.Op&fsnotify.Write == fsnotify.Write {
-	//				fmt.Println("File modified. Scanning for state changes.")
-	//				// Try to acquire the mutex to check whether `consumer.run()` is currently running.
-	//				mutex.Lock()
-	//				if running {
-	//					fmt.Println("Already running")
-	//					// `consumer.run()` is already running, so we don't need to start another instance.
-	//					mutex.Unlock()
-	//					break
-	//				}
-	//				// Set the `running` flag to true and release the mutex.
-	//				fmt.Println("Set running to true")
-	//				running = true
-	//				mutex.Unlock()
-	//
-	//				// Run `consumer.run()` and release the `running` flag when it's done.
-	//				err = consumer.run()
-	//				fmt.Println("Run complete")
-	//				if err != nil {
-	//					fmt.Printf("Error: %v", err)
-	//					glog.Fatalf("Error running scan: %v", err)
-	//				}
-	//				mutex.Lock()
-	//				fmt.Println("Re-set to false")
-	//				running = false
-	//				mutex.Unlock()
-	//			}
-	//		case err, ok := <-watcher.Errors:
-	//			if !ok {
-	//				return
-	//			}
-	//			glog.Fatalf("Error watching file: %v", err)
-	//		}
-	//	}
-	//}()
-	//
-	//// Add a path.
-	//err = watcher.Add(consumer.StateChangeFileName)
-	//if err != nil {
-	//	return err
-	//}
-	//
-	//// Block main goroutine forever.
-	//<-make(chan struct{})
-	//fmt.Printf("Done watching file.\n")
-	//err = consumer.end()
-	//if err != nil {
-	//	glog.Fatalf("Error closing files: %v", err)
-	//}
-	//return nil
-
 	for {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 		err := consumer.run()
 		if err != nil {
-			return err
+			return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error running consumer")
 		}
 	}
-	err := consumer.end()
+}
+
+// Read the next state change entry from the state change file and pass it to the data handler.
+// If the entry is a utxo op, pass it to the utxo op handler.
+// If there are no bytes to read, return true to signify EOF.
+func (consumer *StateSyncerConsumer) readNextEntryFromFile() (bool, error) {
+	// Get the size of the next state change entry.
+	entryByteSize, err := lib.ReadUvarint(consumer.StateChangeFileReader)
+	// Create a buffer to hold the entry.
+	buffer := make([]byte, entryByteSize)
+	bytesRead, err := io.ReadFull(consumer.StateChangeFileReader, buffer)
+	// If there are no bytes to read, return true to signify EOF.
+	if bytesRead == 0 {
+		return true, nil
+	} else if err != nil {
+		return false, errors.Wrapf(err, "consumer.readNextEntryFromFile: Error reading from state change file")
+	} else if bytesRead < int(entryByteSize) {
+		return false, fmt.Errorf("consumer.readNextEntryFromFile: Not enough bytes read from state change file. Expected %d, got %d", entryByteSize, bytesRead)
+	}
+	// Decode the state change entry.
+	stateChangeEntry := &lib.StateChangeEntry{}
+	err = DecodeEntry(stateChangeEntry, buffer)
 	if err != nil {
-		return err
+		return false, errors.Wrapf(err, "consumer.readNextEntryFromFile: Error decoding entry")
+	}
+
+	// If the entry is a utxo op, pass it to the utxo op handler.
+	if len(stateChangeEntry.UtxoOps) > 0 {
+		if err = consumer.handleUtxoOps(stateChangeEntry); err != nil {
+			return false, errors.Wrapf(err, "consumer.readNextEntryFromFile: Error handling utxo ops")
+		}
+		return false, nil
+	} else {
+		// Pass the parsed values to the appropriate data handler function.
+		if consumer.ProcessEntriesInBatches {
+			if err = consumer.HandleEntryOperationBatch(stateChangeEntry); err != nil {
+				return false, errors.Wrapf(err, "consumer.readNextEntryFromFile: Error handling entry operation batch")
+			} else {
+				return false, nil
+			}
+		} else {
+			if err = consumer.DataHandler.HandleEntry(stateChangeEntry); err != nil {
+				return false, errors.Wrapf(err, "consumer.readNextEntryFromFile: Error handling entry")
+			} else {
+				return false, nil
+			}
+		}
+	}
+}
+
+func (consumer *StateSyncerConsumer) handleUtxoOps(stateChangeEntry *lib.StateChangeEntry) error {
+	for _, utxoOp := range stateChangeEntry.UtxoOps {
+		//fmt.Printf("\nHere is the utxoOp: %+v\n\n", utxoOp)
+		disconnectEncoder, disconnectOperationType, disconnectEncoderType := utxoOpToEncoderAndOperationType(utxoOp)
+		if disconnectOperationType == lib.DbOperationTypeSkip {
+			continue
+		}
+		stateChangeEntry.EncoderType = disconnectEncoderType
+		stateChangeEntry.OperationType = disconnectOperationType
+		stateChangeEntry.Encoder = disconnectEncoder
+		// Handle disconnect db operations based on how the consumer is configured to process entries.
+		if consumer.ProcessEntriesInBatches {
+			err := consumer.HandleEntryOperationBatch(stateChangeEntry)
+			if err != nil {
+				return fmt.Errorf("consumer.handleUtxoOps: Error handling entry batch: %w", err)
+			}
+		} else {
+			err := consumer.DataHandler.HandleEntry(stateChangeEntry)
+			if err != nil {
+				return fmt.Errorf("consumer.handleUtxoOps: Error handling entry: %w", err)
+			}
+		}
 	}
 	return nil
 }
 
-// ReadNextEntryFromFile reads the next entry from the state change file and runs the appropriate data handler function.
-// The format of the file is:
-// [operation type (1 byte)][encoder type (2 bytes)][key length (2 bytes)][key bytes][value length (2 bytes)][value bytes]
-func (consumer *StateSyncerConsumer) readNextEntryFromFile() (bool, error) {
-	// Extract the operation type.
-	// Operation type is 0 for insert, 1 for delete, 2 for update, and 3 for upsert.
-	operationTypeInt, err := getUint8FromFile(consumer.StateChangeFile)
-	operationType := lib.StateSyncerOperationType(operationTypeInt)
-	if err != nil {
-		return true, nil
-		//return false, err
-	}
-
-	// If the operation type is an insert, we must be hypersyncing.
-	if operationType == lib.DbOperationTypeInsert && !consumer.IsHypersyncing {
-		consumer.IsHypersyncing = true
-	} else if operationType != lib.DbOperationTypeInsert && consumer.IsHypersyncing {
-		// If the operation type is not an insert, we must have finished hypersyncing.
-		consumer.IsHypersyncing = false
-		if err = consumer.DataHandler.HandleSyncEvent(SyncEventHypersyncComplete); err != nil {
-			return false, err
-		}
-	}
-
-	//fmt.Printf("\nHere is the operation type: %v", operationType)
-
-	// Extract which encoder the entry is encoded with.
-	encoderType, err := getUint16FromFile(consumer.StateChangeFile)
-	if err != nil {
-		return false, err
-	}
-	//fmt.Printf("\nHere is the encoder type: %v", encoderType)
-
-	// Determine how large the key is, in bytes.
-	keyByteSize, err := getUint16FromFile(consumer.StateChangeFile)
-	if err != nil {
-		return false, err
-	}
-	//fmt.Printf("\nHere is the keyByteSize: %v", keyByteSize)
-
-	// Read the contents of the first uint16 from the stateChangeFile into a byte slice.
-	keyBytes, err := getBytesFromFile(int(keyByteSize), consumer.StateChangeFile)
-	if err != nil {
-		return false, err
-	}
-	//fmt.Printf("\nHere is the keyBytes: %v", keyBytes)
-
-	// Get encoder for the key.
-	isEncoder, encoder := lib.StateKeyToDeSoEncoder(keyBytes)
-	if !isEncoder || encoder == nil {
-		return false, fmt.Errorf("No encoder found for encoder type: %d", encoderType)
-	}
-
-	// Determine how large the entry is, in bytes.
-	entryByteSize, err := getUint32FromFile(consumer.StateChangeFile)
-	if err != nil {
-		return false, err
-	}
-	//fmt.Printf("\nHere is the entryByteSize: %v", entryByteSize)
-
-	if entryByteSize > 0 {
-		// Read the contents of the first uint16 from the stateChangeFile into a byte slice.
-		entryBytes, err := getBytesFromFile(int(entryByteSize), consumer.StateChangeFile)
-		if err != nil {
-			return false, err
-		}
-		//fmt.Printf("\nHere is the entryBytes: %v", entryBytes)
-
-		// Decode value to DeSo Encoder.
-		DecodeEntry(encoder, entryBytes)
-	}
-
-	consumer.EntryCount += 1
-	//fmt.Printf("\nHere is the entryCounter: %v", consumer.EntryCounter)
-	//fmt.Printf("\nHere is the encoder: %+v", encoder)
-
-	// Pass the parsed values to the appropriate data handler function.
-	if consumer.ProcessEntriesInBatches {
-		return false, consumer.HandleEntryOperationBatch(keyBytes, &encoder, lib.EncoderType(encoderType), operationType)
-	} else {
-		return false, consumer.DataHandler.HandleEntry(keyBytes, encoder, lib.EncoderType(encoderType), operationType)
-	}
-}
-
 func (consumer *StateSyncerConsumer) run() error {
 	fileEOF := false
-	fmt.Println("Before File EOF")
 	for !fileEOF {
 		var err error
 		fileEOF, err = consumer.readNextEntryFromFile()
 		if err != nil {
-			fmt.Println("Err != nil")
-			return err
+			return fmt.Errorf("consumer.run: Error reading next entry from file: %w", err)
 		}
 	}
 	return consumer.cleanup()
@@ -292,14 +206,14 @@ func (consumer *StateSyncerConsumer) run() error {
 func (consumer *StateSyncerConsumer) end() error {
 	consumer.cleanup()
 	if err := consumer.StateChangeFile.Close(); err != nil {
-		return err
+		return errors.Wrapf(err, "consumer.end: Error closing state change file")
 	}
 	if err := consumer.StateChangeIndexFile.Close(); err != nil {
-		return err
+		return errors.Wrapf(err, "consumer.end: Error closing state change index file")
 	}
 	if consumer.ConsumerProgressFile != nil {
 		if err := consumer.ConsumerProgressFile.Close(); err != nil {
-			return err
+			return errors.Wrapf(err, "consumer.end: Error closing consumer progress file")
 		}
 	}
 	return nil
@@ -319,21 +233,21 @@ func (consumer *StateSyncerConsumer) retrieveFileIndexForDbOperation() (uint32, 
 	}
 	consumer.LastScannedIndex = startEntryIndex
 	fmt.Printf("Last scanned index: %d\n", startEntryIndex)
-	// Each entry byte index is represented as a uint32. This means the entry byte index exists at it'consumer
+	// Each entry byte index is represented as a uint32. This means the entry byte index exists at its consumer
 	// index * 4.
 	entryIndexBytes := make([]byte, 4)
 	fileBytesPosition := int64(startEntryIndex * 4)
 	bytesRead, err := consumer.StateChangeIndexFile.ReadAt(entryIndexBytes, fileBytesPosition)
 	if err != nil {
-		return 0, err
+		return 0, errors.Wrapf(err, "consumer.retrieveFileIndexForDbOperation: Error reading from state change index file")
 	}
 	// If we read no bytes, we're at EOF.
 	if bytesRead == 0 {
-		return 0, fmt.Errorf("EOF reached")
+		return 0, fmt.Errorf("consumer.retrieveFileIndexForDbOperation: EOF reached")
 	}
 	// If we read a weird number of bytes, something is wrong.
 	if bytesRead < 4 {
-		return 0, fmt.Errorf("Too few bytes read")
+		return 0, fmt.Errorf("consumer.retrieveFileIndexForDbOperation: Too few bytes read")
 	}
 
 	// Use binary package to read a uint32 index from the byte slice representing the index of the db operation.
@@ -344,13 +258,13 @@ func (consumer *StateSyncerConsumer) retrieveFileIndexForDbOperation() (uint32, 
 func (consumer *StateSyncerConsumer) saveConsumerProgressToFile(entryIndex uint32) error {
 	file, err := os.Create(consumer.ConsumerProgressFileName)
 	if err != nil {
-		return err
+		return errors.Wrapf(err, "consumer.saveConsumerProgressToFile: Error creating consumer progress file: %s", consumer.ConsumerProgressFileName)
 	}
 	defer file.Close()
 
 	err = binary.Write(file, binary.LittleEndian, entryIndex)
 	if err != nil {
-		return err
+		return errors.Wrapf(err, "consumer.saveConsumerProgressToFile: Error writing entry index to consumer progress file: %s", consumer.ConsumerProgressFileName)
 	}
 	consumer.LastScannedIndex = entryIndex
 	return nil
@@ -358,14 +272,14 @@ func (consumer *StateSyncerConsumer) saveConsumerProgressToFile(entryIndex uint3
 
 func (consumer *StateSyncerConsumer) cleanup() error {
 	// If there are still bulk operations to perform, perform them now.
-	if consumer.ProcessEntriesInBatches && consumer.BatchedEntries != nil && len(consumer.BatchedEntries.Entries) > 0 {
+	if consumer.ProcessEntriesInBatches && consumer.BatchedEntries != nil && len(consumer.BatchedEntries) > 0 {
 		// TODO: Reduce re-used code here.
 		err := consumer.DataHandler.HandleEntryBatch(consumer.BatchedEntries)
 		if err != nil {
-			return err
+			return errors.Wrapf(err, "consumer.cleanup: Error handling entry batch")
 		}
-		handledEntries := len(UniqueEntries(consumer.BatchedEntries.Entries))
-		fmt.Printf("Handled batch %d\n", consumer.BatchCount)
+		handledEntries := len(UniqueEntries(consumer.BatchedEntries))
+		fmt.Printf("consumer.cleanup: Handled batch %d\n", consumer.BatchCount)
 		consumer.BatchCount += 1
 		consumer.BatchedEntries = nil
 		return consumer.saveConsumerProgressToFile(consumer.LastScannedIndex + uint32(handledEntries))

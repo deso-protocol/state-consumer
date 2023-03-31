@@ -128,35 +128,6 @@ func getUint32FromFile(file *os.File) (uint32, error) {
 	return value, nil
 }
 
-func getUint16FromFile(file *os.File) (uint16, error) {
-	// Read the contents of the next 2 bytes from the stateChangeFile into a byte slice.
-	uint16Bytes, err := getBytesFromFile(2, file)
-	if err != nil {
-		return 0, err
-	}
-
-	// Use binary package to read a uint16 from the byte slice.
-	value := binary.LittleEndian.Uint16(uint16Bytes)
-	return value, nil
-}
-
-func getUint8FromFile(file *os.File) (uint8, error) {
-	// Read the contents of the next byte from the stateChangeFile into a byte slice
-	uint8Bytes, err := getBytesFromFile(1, file)
-	if err != nil {
-		return 0, err
-	}
-
-	// Use binary.Read to read a uint8 value from the byte slice
-	var value uint8
-	err = binary.Read(bytes.NewReader(uint8Bytes), binary.LittleEndian, &value)
-	if err != nil {
-		return 0, err
-	}
-
-	return value, nil
-}
-
 func getBytesFromFile(entryByteSize int, file *os.File) ([]byte, error) {
 	// Read the contents of the entry from the stateChangeFile into a byte slice
 	structBytes := make([]byte, entryByteSize)
@@ -168,4 +139,21 @@ func getBytesFromFile(entryByteSize int, file *os.File) ([]byte, error) {
 		return nil, fmt.Errorf("Too few bytes read")
 	}
 	return structBytes, nil
+}
+
+// utxoOpToEncoderAndOperationType returns the encoder and operation type for a given UtxoOperation. This allows the
+// consumer to translate a UtxoOperation into whatever state change operation it should be performing (i.e. upsert or
+// delete), and which values should be passed to that operation. The encoder type is also returned, because for any deletes,
+// the encoder passed back will be nil, thus not allowing the consumer to determine the type of the encoder.
+func utxoOpToEncoderAndOperationType(utxoOp *lib.UtxoOperation) (lib.DeSoEncoder, lib.StateSyncerOperationType, lib.EncoderType) {
+	switch utxoOp.Type {
+	case lib.OperationTypeSubmitPost:
+		if utxoOp.PrevPostEntry == nil {
+			return utxoOp.PrevPostEntry, lib.DbOperationTypeDelete, lib.EncoderTypePostEntry
+		} else {
+			return utxoOp.PrevPostEntry, lib.DbOperationTypeUpsert, lib.EncoderTypePostEntry
+		}
+	default:
+		return nil, lib.DbOperationTypeSkip, lib.EncoderTypeUtxoEntry
+	}
 }
