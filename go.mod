@@ -8,8 +8,8 @@ replace github.com/deso-protocol/backend => ../backend/
 
 require (
 	github.com/deso-protocol/core v0.0.0-00010101000000-000000000000
-	github.com/fsnotify/fsnotify v1.4.9
 	github.com/golang/glog v1.0.0
+	github.com/pkg/errors v0.9.1
 )
 
 require (
@@ -44,11 +44,11 @@ require (
 	github.com/google/uuid v1.2.0 // indirect
 	github.com/holiman/uint256 v1.1.1 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
+	github.com/kr/pretty v0.3.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.17 // indirect
 	github.com/oleiade/lane v1.0.1 // indirect
 	github.com/petermattis/goid v0.0.0-20180202154549-b0b1615b78e5 // indirect
-	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/shibukawa/configdir v0.0.0-20170330084843-e180dbdc8da0 // indirect
 	github.com/stretchr/testify v1.8.1 // indirect
@@ -62,7 +62,7 @@ require (
 	go.opencensus.io v0.23.0 // indirect
 	golang.org/x/crypto v0.6.0 // indirect
 	golang.org/x/net v0.6.0 // indirect
-	golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4 // indirect
+	golang.org/x/sync v0.1.0 // indirect
 	golang.org/x/sys v0.5.0 // indirect
 	golang.org/x/tools v0.1.12 // indirect
 	google.golang.org/protobuf v1.26.0 // indirect

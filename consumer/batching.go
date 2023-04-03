@@ -3,8 +3,90 @@ package consumer
 import (
 	"fmt"
 	"github.com/deso-protocol/core/lib"
+	"github.com/golang/glog"
 	"github.com/pkg/errors"
+	"math"
+	"time"
 )
+
+const (
+	retryLimit = 10
+)
+
+func (consumer *StateSyncerConsumer) listenForBatchEvents() {
+	for batchEvent := range consumer.DBEntryChannel {
+		go consumer.callDataHandlerBatch(batchEvent)
+	}
+}
+
+func (consumer *StateSyncerConsumer) callDataHandlerBatch(batchedEntries []*lib.StateChangeEntry) {
+	// TODO: Also pass in some information which allows us to identify which txn indexes the batch represents i.e. start idx.
+	err := consumer.callBatchWithRetries(batchedEntries, 0)
+	if err != nil {
+		glog.Fatalf("consumer.callDataHandlerBatch: %v", err)
+	}
+	// Remove a value from the blocking channel to allow the next batch to be processed.
+	<-consumer.DBBlockingChannel
+}
+
+// callBatchWithRetries calls the data handler to process a batch of entries. If the call fails, it will retry
+// with a smaller batch size until it succeeds or hits the max number of retries.
+func (consumer *StateSyncerConsumer) callBatchWithRetries(batchedEntries []*lib.StateChangeEntry, retries int) error {
+
+	if err := consumer.DataHandler.HandleEntryBatch(batchedEntries); err != nil {
+		batchSize := len(batchedEntries)
+		// Exponential backoff for retries
+		waitTime := 5 * time.Duration(math.Pow(2, float64(retries))) * time.Second
+		if retries > retryLimit {
+			return errors.Wrapf(err, "consumer.callBatchWithRetries: tried %d times to process batch", retries)
+		} else if batchSize == 1 {
+			time.Sleep(waitTime)
+			err = consumer.callBatchWithRetries(batchedEntries, retries)
+			if err != nil {
+				return errors.Wrapf(err, "consumer.callBatchWithRetries: ")
+			}
+		} else {
+			fmt.Printf("Received error, retry with size%d: %v\n", batchSize, err)
+			// If we failed to process a batch, try processing the batch in half until we get down to a single entry.
+			batch1 := batchedEntries[:batchSize/2]
+			batch2 := batchedEntries[batchSize/2:]
+			// Set the operation type to upsert in case the error was a duplicate key error.
+			// (We know that the original batch was an insert because hypersyncing only creates inserts.)
+			batch1[0].OperationType = lib.DbOperationTypeUpsert
+			batch2[0].OperationType = lib.DbOperationTypeUpsert
+			time.Sleep(waitTime)
+			err = consumer.callBatchWithRetries(batch1, retries)
+			if err != nil {
+				return errors.Wrapf(err, "consumer.callBatchWithRetries: ")
+			}
+			time.Sleep(waitTime)
+			err = consumer.callBatchWithRetries(batch2, retries)
+			if err != nil {
+				return errors.Wrapf(err, "consumer.callBatchWithRetries: ")
+			}
+
+		}
+	}
+	fmt.Printf("Handled batch %d\n", consumer.BatchCount)
+	consumer.BatchCount++
+	return nil
+}
+
+// Take a slice of state change entries and add them to the appropriate channel, if we are hypersyncing.
+func (consumer *StateSyncerConsumer) QueueBatch(batchedEntries []*lib.StateChangeEntry) {
+	if consumer.IsHypersyncing {
+		// Add bool to blocking channel so that we can block the next batch from being processed if the channel is at capacity.
+		consumer.DBBlockingChannel <- true
+		// Add the state change entry batch to the channel so that it can be processed by the listener.
+		consumer.DBEntryChannel <- batchedEntries
+	} else {
+		// When not in hypersync, just call the data handler directly.
+		// We don't run transactions concurrently, as transactions may be dependent on each other.
+		if err := consumer.callBatchWithRetries(batchedEntries, 0); err != nil {
+			glog.Fatalf("consumer.QueueBatch: %v", err)
+		}
+	}
+}
 
 // HandleEntryOperationBatch handles the logic for batching entries to be inserted into the database.
 func (consumer *StateSyncerConsumer) HandleEntryOperationBatch(stateChangeEntry *lib.StateChangeEntry) error {
@@ -19,17 +101,15 @@ func (consumer *StateSyncerConsumer) HandleEntryOperationBatch(stateChangeEntry 
 	} else if len(consumer.BatchedEntries) > 0 {
 		// If the batched entries do exist, but the batched encoder type and db operation don't match, or the max
 		// batched size has been reached, then do the insert/upsert/delete.
-		err := consumer.DataHandler.HandleEntryBatch(consumer.BatchedEntries)
-		if err != nil {
-			return errors.Wrapf(err, "consumer.HandleEntryOperationBatch: Problem handling entry batch")
-		}
-		fmt.Printf("Handled batch %d\n", consumer.BatchCount)
+
+		// This queues the batch to be handled asynchronously, so that multiple batches can be processed at once.
+		consumer.QueueBatch(consumer.BatchedEntries)
+
 		handledEntries := len(UniqueEntries(consumer.BatchedEntries))
-		err = consumer.saveConsumerProgressToFile(consumer.LastScannedIndex + uint32(handledEntries))
+		err := consumer.saveConsumerProgressToFile(consumer.LastScannedIndex + uint32(handledEntries))
 		if err != nil {
 			return errors.Wrapf(err, "consumer.HandleEntryOperationBatch: Problem saving consumer progress to file")
 		}
-		consumer.BatchCount = consumer.BatchCount + 1
 	}
 
 	// Since this is either a brand new batched encoder instance, or the batched entries were just inserted, replace

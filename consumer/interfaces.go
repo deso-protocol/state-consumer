@@ -7,8 +7,9 @@ type SyncEvent uint8
 const (
 	// We intentionally skip zero as otherwise that would be the default value.
 	SyncEventStart             SyncEvent = 0
-	SyncEventHypersyncComplete SyncEvent = 1
-	SyncEventComplete          SyncEvent = 2
+	SyncEventHypersyncStart    SyncEvent = 1
+	SyncEventHypersyncComplete SyncEvent = 2
+	SyncEventComplete          SyncEvent = 3
 )
 
 // The StateSyncerDataHandler interface is implemented by the data handler implementation. It is used by the
