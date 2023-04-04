@@ -14,7 +14,14 @@ import (
 )
 
 // CopyStruct takes 2 structs and copies values from fields of the same name from the source struct to the destination struct.
-// This is used to copy values from a deso entry struct to a protobuf entry struct.
+// This helper can be used by the data handler to easily copy values between the deso encoder and whichever struct type
+// is needed to perform the db operations by the handler.
+// This function also handles decoding fields that need to be decoded in some way. These fields are marked with a
+// "decode_function" tag in the destination struct.
+// The "decode_src_field_name" tag is used to specify the name of the source struct field that contains the data to be decoded.
+// The "decode_body_field_name" tag is used to specify the name of the destination struct field that the decoded data should be copied to.
+// The "decode_function" tag can be one of the following: "blockhash", "bytehash", "deso_body_schema", "base_58_check",
+// "extra_data", and "timestamp".
 func CopyStruct(src interface{}, dst interface{}) error {
 	srcValue := reflect.ValueOf(src).Elem()
 	dstValue := reflect.ValueOf(dst).Elem()
@@ -102,6 +109,7 @@ func CopyStruct(src interface{}, dst interface{}) error {
 	return nil
 }
 
+// DecodeEntry decodes bytes and returns a deso entry struct.
 func DecodeEntry(encoder lib.DeSoEncoder, entryBytes []byte) error {
 	if encoder == nil {
 		return errors.New("Error getting encoder")
@@ -116,6 +124,7 @@ func DecodeEntry(encoder lib.DeSoEncoder, entryBytes []byte) error {
 	}
 }
 
+// getUint64FromFile reads the next 4 bytes from the stateChangeFile and returns a uint32.
 func getUint32FromFile(file *os.File) (uint32, error) {
 	// Read the contents of the next 4 bytes from the stateChangeFile into a byte slice.
 	uint32Bytes, err := getBytesFromFile(4, file)
@@ -128,6 +137,7 @@ func getUint32FromFile(file *os.File) (uint32, error) {
 	return value, nil
 }
 
+// getBytesFromFile reads the next entryByteSize bytes from the stateChangeFile and returns a byte slice.
 func getBytesFromFile(entryByteSize int, file *os.File) ([]byte, error) {
 	// Read the contents of the entry from the stateChangeFile into a byte slice
 	structBytes := make([]byte, entryByteSize)

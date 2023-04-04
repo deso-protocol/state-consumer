@@ -10,6 +10,7 @@ require (
 	github.com/deso-protocol/core v0.0.0-00010101000000-000000000000
 	github.com/golang/glog v1.0.0
 	github.com/pkg/errors v0.9.1
+	github.com/stretchr/testify v1.8.1
 )
 
 require (
@@ -51,7 +52,6 @@ require (
 	github.com/petermattis/goid v0.0.0-20180202154549-b0b1615b78e5 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/shibukawa/configdir v0.0.0-20170330084843-e180dbdc8da0 // indirect
-	github.com/stretchr/testify v1.8.1 // indirect
 	github.com/tmthrgd/go-hex v0.0.0-20190904060850-447a3041c3bc // indirect
 	github.com/tyler-smith/go-bip39 v1.1.0 // indirect
 	github.com/unrolled/secure v1.0.8 // indirect
@@ -66,5 +66,6 @@ require (
 	golang.org/x/sys v0.5.0 // indirect
 	golang.org/x/tools v0.1.12 // indirect
 	google.golang.org/protobuf v1.26.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 	mellium.im/sasl v0.3.1 // indirect
 )
