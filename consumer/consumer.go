@@ -45,10 +45,10 @@ type StateSyncerConsumer struct {
 }
 
 func (consumer *StateSyncerConsumer) InitializeAndRun(
-	stateChangeFileName string, stateChangeIndexFileName string, consumerProgressFilename string, processInBatches bool,
-	batchSize int, threadLimit int, handler StateSyncerDataHandler) error {
+	stateChangeFileName string, stateChangeIndexFileName string, consumerProgressFilename string, batchSize int,
+	threadLimit int, handler StateSyncerDataHandler) error {
 	// initialize the consumer
-	err := consumer.initialize(stateChangeFileName, stateChangeIndexFileName, consumerProgressFilename, processInBatches,
+	err := consumer.initialize(stateChangeFileName, stateChangeIndexFileName, consumerProgressFilename,
 		batchSize, threadLimit, handler)
 	if err != nil && err.Error() != "EOF" {
 		return errors.Wrapf(err, "consumer.InitializeAndRun: Error initializing consumer")
@@ -69,7 +69,7 @@ func (consumer *StateSyncerConsumer) InitializeAndRun(
 // Open the state change file and the index file, and determine the byte index that the state syncer should start
 // parsing at.
 func (consumer *StateSyncerConsumer) initialize(stateChangeFileName string, stateChangeIndexFileName string,
-	consumerProgressFilename string, processInBatches bool, batchSize int, threadLimit int,
+	consumerProgressFilename string, batchSize int, threadLimit int,
 	handler StateSyncerDataHandler) error {
 	// Set up the data handler initial values.
 	consumer.IsHypersyncing = false
