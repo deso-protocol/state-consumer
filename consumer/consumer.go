@@ -132,11 +132,20 @@ func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() error {
 }
 
 // waitForStateChangesFile blocks execution until the state changes file is created, and then assigns it to the consumer.
+// It blocks until the file is non-empty.
 func (consumer *StateSyncerConsumer) waitForStateChangesFile() {
 	for {
+		// Attempt to open the state changes file. If it doesn't exist, wait 5 seconds and try again.
 		if stateChangeFile, err := os.Open(consumer.StateChangeFileName); err == nil {
 			consumer.StateChangeFile = stateChangeFile
-			break
+			// Once the file successfully is open, check if it is empty. If it is, wait 5 seconds and try again.
+			stateChangeFileInfo, err := stateChangeFile.Stat()
+			if err == nil {
+				// If the file is non-empty, break out of the loop and stop blocking the thread.
+				if stateChangeFileInfo.Size() > 0 {
+					break
+				}
+			}
 		}
 		fmt.Println("Waiting for state changes file to be created...")
 		time.Sleep(5 * time.Second)
