@@ -5,9 +5,9 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"github.com/deso-protocol/core/lib"
+	"github.com/pkg/errors"
 	"os"
 	"reflect"
 	"time"
@@ -42,12 +42,19 @@ func CopyStruct(src interface{}, dst interface{}) error {
 		dstField := dstValue.FieldByName(dstFieldName)
 
 		// TODO: Break each of these out into their own functions.
+		// TODO: Create comprehensive documentation of the various decoder functions.
 		// If the field needs to be decoded in some way, handle that here.
 		if dstFieldDecodeFunction == "blockhash" {
 			fieldValue := srcValue.FieldByName(dstFieldDecodeSrcField)
 			if fieldValue.IsValid() && fieldValue.Elem().IsValid() {
 				postHashBytes := fieldValue.Elem().Slice(0, lib.HashSizeBytes).Bytes()
 				dstValue.FieldByName(dstFieldName).SetString(hex.EncodeToString(postHashBytes))
+			}
+		} else if dstFieldDecodeFunction == "pkid" {
+			fieldValue := srcValue.FieldByName(dstFieldDecodeSrcField)
+			if fieldValue.IsValid() && fieldValue.Elem().IsValid() {
+				pkidBytes := fieldValue.Elem().Slice(0, lib.PublicKeyLenCompressed).Bytes()
+				dstValue.FieldByName(dstFieldName).Set(reflect.ValueOf(pkidBytes))
 			}
 		} else if dstFieldDecodeFunction == "bytehash" {
 			fieldValue := srcValue.FieldByName(dstFieldDecodeSrcField)
@@ -67,6 +74,15 @@ func CopyStruct(src interface{}, dst interface{}) error {
 			dstValue.FieldByName(dstValue.Type().Field(i).Tag.Get("decode_body_field_name")).SetString(body.Body)
 			dstValue.FieldByName(dstValue.Type().Field(i).Tag.Get("decode_image_urls_field_name")).Set(reflect.ValueOf(body.ImageURLs))
 			dstValue.FieldByName(dstValue.Type().Field(i).Tag.Get("decode_video_urls_field_name")).Set(reflect.ValueOf(body.VideoURLs))
+		} else if dstFieldDecodeFunction == "string_bytes" {
+			stringField := srcValue.FieldByName(dstFieldDecodeSrcField)
+			stringBytes := stringField.Bytes()
+			dstValue.FieldByName(dstFieldName).SetString(string(stringBytes))
+		} else if dstFieldDecodeFunction == "nested_value" {
+			structField := srcValue.FieldByName(dstFieldDecodeSrcField)
+			if structField.IsValid() {
+				dstValue.FieldByName(dstFieldName).Set(structField.FieldByName(dstValue.Type().Field(i).Tag.Get("nested_field_name")))
+			}
 		} else if dstFieldDecodeFunction == "base_58_check" {
 			fieldValue := srcValue.FieldByName(dstFieldDecodeSrcField)
 			if fieldValue.IsValid() {
@@ -120,7 +136,7 @@ func DecodeEntry(encoder lib.DeSoEncoder, entryBytes []byte) error {
 	if exists, err := lib.DecodeFromBytes(encoder, rr); exists && err == nil {
 		return nil
 	} else {
-		return errors.New("Error decoding entry")
+		return errors.Wrapf(err, "Error decoding entry")
 	}
 }
 
@@ -155,15 +171,45 @@ func getBytesFromFile(entryByteSize int, file *os.File) ([]byte, error) {
 // consumer to translate a UtxoOperation into whatever state change operation it should be performing (i.e. upsert or
 // delete), and which values should be passed to that operation. The encoder type is also returned, because for any deletes,
 // the encoder passed back will be nil, thus not allowing the consumer to determine the type of the encoder.
-func utxoOpToEncoderAndOperationType(utxoOp *lib.UtxoOperation) (lib.DeSoEncoder, lib.StateSyncerOperationType, lib.EncoderType) {
+func utxoOpToEncoderAndOperationType(stateChangeEntry *lib.StateChangeEntry, utxoOp *lib.UtxoOperation) (lib.DeSoEncoder, lib.StateSyncerOperationType, lib.EncoderType) {
 	switch utxoOp.Type {
 	case lib.OperationTypeSubmitPost:
-		if utxoOp.PrevPostEntry == nil {
-			return utxoOp.PrevPostEntry, lib.DbOperationTypeDelete, lib.EncoderTypePostEntry
+		return utxoOp.PrevPostEntry, getDisconnectOperationTypeForPrevEntry(utxoOp.PrevPostEntry), lib.EncoderTypePostEntry
+	case lib.OperationTypeUpdateProfile:
+		return utxoOp.PrevProfileEntry, getDisconnectOperationTypeForPrevEntry(utxoOp.PrevProfileEntry), lib.EncoderTypeProfileEntry
+	case lib.OperationTypeLike:
+		return utxoOp.PrevLikeEntry, getDisconnectOperationTypeForPrevEntry(utxoOp.PrevLikeEntry), lib.EncoderTypeLikeEntry
+	case lib.OperationTypeFollow:
+		// Revert the follow based on the original operation type
+		var operationType lib.StateSyncerOperationType
+		if stateChangeEntry.OperationType == lib.DbOperationTypeUpsert {
+			operationType = lib.DbOperationTypeDelete
 		} else {
-			return utxoOp.PrevPostEntry, lib.DbOperationTypeUpsert, lib.EncoderTypePostEntry
+			operationType = lib.DbOperationTypeUpsert
 		}
+		return stateChangeEntry.Encoder, operationType, lib.EncoderTypeFollowEntry
+	case lib.OperationTypeDeSoDiamond:
+		return utxoOp.PrevDiamondEntry, getDisconnectOperationTypeForPrevEntry(utxoOp.PrevDiamondEntry), lib.EncoderTypeDiamondEntry
 	default:
 		return nil, lib.DbOperationTypeSkip, lib.EncoderTypeUtxoEntry
+	}
+}
+
+func GetPKIDBytesFromKey(key []byte) []byte {
+	prefixLen := len(lib.Prefixes.PrefixPKIDToProfileEntry)
+	return key[prefixLen:]
+}
+
+// getDisconnectOperationTypeForPrevEntry returns the operation type for a given utxoOp entry in order to perform a mempool disconnect.
+// If the encoder is nil, the operation type is delete. Otherwise, it is upsert.
+func getDisconnectOperationTypeForPrevEntry(prevEntry lib.DeSoEncoder) lib.StateSyncerOperationType {
+	// Use reflection to determine if the previous entry is nil.
+	val := reflect.ValueOf(prevEntry)
+	if val.Kind() == reflect.Ptr && val.IsNil() {
+		// If the previous entry is nil, we should delete the current entry to revert it to its previous state.
+		return lib.DbOperationTypeDelete
+	} else {
+		// If the previous entry isn't nil, an upsert will bring it back to its previous state.
+		return lib.DbOperationTypeUpsert
 	}
 }

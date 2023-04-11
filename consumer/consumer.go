@@ -24,15 +24,21 @@ type StateSyncerConsumer struct {
 	// File that contains the entry index of the last saved state change.
 	ConsumerProgressFile     *os.File
 	ConsumerProgressFileName string
+
+	// TODO: Make this a slice, so many handlers can be registered and running at once.
 	// The data handler that will be used to process the state changes that the consumer parses.
 	DataHandler StateSyncerDataHandler
+
 	// An object that contains the state changes that have been parsed but not yet processed. Used for batching.
 	BatchedEntries []*lib.StateChangeEntry
 	// The maximum number of entries to batch before inserting into the database.
 	MaxBatchSize int
 
-	// Track whether we're currently hypersyncing
+	// Track whether we're currently hypersyncing.
 	IsHypersyncing bool
+	// Track whether we're currently syncing from the beginning.
+	SyncingFromBeginning bool
+
 	// A counter to keep track of how many batches have been inserted.
 	BatchCount int
 	EntryCount uint32
@@ -111,6 +117,7 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeFileName string, stat
 
 	// If the byte index is 0, we are starting a fresh sync.
 	if stateChangeFileByteIndex == 0 {
+		consumer.SyncingFromBeginning = true
 		if err = consumer.DataHandler.HandleSyncEvent(SyncEventStart); err != nil {
 			return errors.Wrapf(err, "consumer.initialize: Error handling sync start event")
 		}
@@ -142,8 +149,20 @@ func (consumer *StateSyncerConsumer) run() error {
 			}
 		}
 	}
+
 	// Once we've reached the file EOF, process any remaining batched entries and cleanup.
-	return consumer.cleanup()
+	if err := consumer.cleanup(); err != nil {
+		return errors.Wrapf(err, "consumer.run: Error cleaning up")
+	}
+
+	// If we are syncing from the beginning, emit a sync end event.
+	if consumer.SyncingFromBeginning {
+		consumer.SyncingFromBeginning = false
+		if err := consumer.DataHandler.HandleSyncEvent(SyncEventComplete); err != nil {
+			return errors.Wrapf(err, "consumer.run: Error handling sync end event")
+		}
+	}
+	return nil
 }
 
 // readNextEntryFromFile reads the next StateChangeEntry bytes from the state change file and decode them.
@@ -167,6 +186,7 @@ func (consumer *StateSyncerConsumer) readNextEntryFromFile() (*lib.StateChangeEn
 	if err = DecodeEntry(stateChangeEntry, buffer); err != nil {
 		return nil, false, errors.Wrapf(err, "consumer.readNextEntryFromFile: Error decoding entry")
 	}
+
 	consumer.EntryCount++
 	return stateChangeEntry, false, nil
 }
@@ -192,6 +212,12 @@ func (consumer *StateSyncerConsumer) detectAndHandleSyncEvent(stateChangeEntry *
 			return errors.Wrapf(err, "consumer.detectAndHandleSyncEvent: Error handling hypersync complete event")
 		}
 	}
+
+	// Determine if we've reached a new transaction type during hypersync, log it if so.
+	if consumer.IsHypersyncing && len(consumer.BatchedEntries) > 0 && stateChangeEntry.EncoderType != consumer.BatchedEntries[0].EncoderType {
+		fmt.Printf("Now hypersyncing encoder type %d\n", stateChangeEntry.EncoderType)
+	}
+
 	return nil
 }
 
@@ -266,7 +292,7 @@ func (consumer *StateSyncerConsumer) waitForAllInsertsToComplete() {
 // into the appropriate disconnect operation and pass it to be handled by the batch data handler.
 func (consumer *StateSyncerConsumer) handleUtxoOps(stateChangeEntry *lib.StateChangeEntry) error {
 	for _, utxoOp := range stateChangeEntry.UtxoOps {
-		disconnectEncoder, disconnectOperationType, disconnectEncoderType := utxoOpToEncoderAndOperationType(utxoOp)
+		disconnectEncoder, disconnectOperationType, disconnectEncoderType := utxoOpToEncoderAndOperationType(stateChangeEntry, utxoOp)
 		if disconnectOperationType == lib.DbOperationTypeSkip {
 			continue
 		}
