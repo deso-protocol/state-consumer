@@ -155,8 +155,9 @@ func UniqueEntries(entries []*lib.StateChangeEntry) []*lib.StateChangeEntry {
 	uniqueEntries := make([]*lib.StateChangeEntry, 0)
 
 	// Loop through the encoders, and only add the unique ones to the return array.
-	for i := len(entries) - 1; i >= 0; i-- {
-		entry := entries[i]
+	// Loop through them in reverse so that in the case of duplicates, the most recent entry is kept.
+	for ii := len(entries) - 1; ii >= 0; ii-- {
+		entry := entries[ii]
 		keyString := string(entry.KeyBytes)
 		if _, exists := uniqueEntryMap[keyString]; exists {
 			continue

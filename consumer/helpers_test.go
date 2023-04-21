@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/deso-protocol/core/lib"
+	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun/extra/bunbig"
 	"testing"
 	"time"
 )
@@ -121,6 +123,24 @@ func TestCopyPostStruct(t *testing.T) {
 		VideoUrls:       []string{"https://test.com/video1.mp4", "https://test.com/video2.mp4"},
 		Timestamp:       time.Time{},
 	}, struct2)
+}
+
+type testBalanceResponse struct {
+	BalanceNanos *bunbig.Int `decode_function:"uint256" decode_src_field_name:"BalanceNanos"`
+}
+
+func TestConvertUint256ToBigInt(t *testing.T) {
+	balanceUint256, err := uint256.FromHex("0x3ADE68B1")
+	require.NoError(t, err)
+	balanceEntry := &lib.BalanceEntry{
+		BalanceNanos: *balanceUint256,
+	}
+
+	responseStruct := &testBalanceResponse{}
+	err = CopyStruct(balanceEntry, responseStruct)
+	require.NoError(t, err)
+
+	require.Equal(t, responseStruct.BalanceNanos.ToUInt64(), uint64(987654321))
 }
 
 func TestGetDisconnectOperationTypeForPrevEntry(t *testing.T) {

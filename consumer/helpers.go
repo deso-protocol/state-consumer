@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/deso-protocol/core/lib"
+	"github.com/holiman/uint256"
 	"github.com/pkg/errors"
+	"github.com/uptrace/bun/extra/bunbig"
 	"os"
 	"reflect"
 	"time"
@@ -32,23 +34,30 @@ func CopyStruct(src interface{}, dst interface{}) error {
 
 	// Loop through all the fields in the source struct, and copy them over to the destination struct
 	// if the destination struct contains a field of the same name and type.
-	for i := 0; i < dstValue.NumField(); i++ {
+	for ii := 0; ii < dstValue.NumField(); ii++ {
 		// Get properties of the source field.
-		dstFieldName := dstValue.Type().Field(i).Name
-		dstFieldType := dstValue.Type().Field(i).Type
-		dstFieldDecodeFunction := dstValue.Type().Field(i).Tag.Get("decode_function")
-		dstFieldDecodeSrcField := dstValue.Type().Field(i).Tag.Get("decode_src_field_name")
+		dstFieldName := dstValue.Type().Field(ii).Name
+		dstFieldType := dstValue.Type().Field(ii).Type
+		dstFieldDecodeFunction := dstValue.Type().Field(ii).Tag.Get("decode_function")
+		dstFieldDecodeSrcField := dstValue.Type().Field(ii).Tag.Get("decode_src_field_name")
 		srcField := srcValue.FieldByName(dstFieldName)
 		dstField := dstValue.FieldByName(dstFieldName)
 
 		// TODO: Break each of these out into their own functions.
 		// TODO: Create comprehensive documentation of the various decoder functions.
+		// TODO: all these functions that convert from bytes to hex strings should be consolidated.
 		// If the field needs to be decoded in some way, handle that here.
 		if dstFieldDecodeFunction == "blockhash" {
 			fieldValue := srcValue.FieldByName(dstFieldDecodeSrcField)
 			if fieldValue.IsValid() && fieldValue.Elem().IsValid() {
 				postHashBytes := fieldValue.Elem().Slice(0, lib.HashSizeBytes).Bytes()
 				dstValue.FieldByName(dstFieldName).SetString(hex.EncodeToString(postHashBytes))
+			}
+		} else if dstFieldDecodeFunction == "group_key_name" {
+			fieldValue := srcValue.FieldByName(dstFieldDecodeSrcField)
+			if fieldValue.IsValid() && fieldValue.Elem().IsValid() {
+				groupKeyNameBytes := fieldValue.Elem().Slice(0, lib.MaxAccessGroupKeyNameCharacters).Bytes()
+				dstValue.FieldByName(dstFieldName).SetString(hex.EncodeToString(groupKeyNameBytes))
 			}
 		} else if dstFieldDecodeFunction == "pkid" {
 			fieldValue := srcValue.FieldByName(dstFieldDecodeSrcField)
@@ -62,6 +71,12 @@ func CopyStruct(src interface{}, dst interface{}) error {
 				postHashBytes := fieldValue.Slice(0, lib.HashSizeBytes).Bytes()
 				dstValue.FieldByName(dstFieldName).SetString(hex.EncodeToString(postHashBytes))
 			}
+		} else if dstFieldDecodeFunction == "uint256" {
+			srcInt, ok := srcField.Interface().(uint256.Int)
+			if !ok {
+				return errors.New("could not convert src field to uint256.Int")
+			}
+			dstField.Set(reflect.ValueOf(bunbig.FromMathBig(srcInt.ToBig())))
 		} else if dstFieldDecodeFunction == "deso_body_schema" {
 			bodyField := srcValue.FieldByName(dstFieldDecodeSrcField)
 			bodyBytes := bodyField.Bytes()
@@ -71,9 +86,9 @@ func CopyStruct(src interface{}, dst interface{}) error {
 				return err
 			}
 
-			dstValue.FieldByName(dstValue.Type().Field(i).Tag.Get("decode_body_field_name")).SetString(body.Body)
-			dstValue.FieldByName(dstValue.Type().Field(i).Tag.Get("decode_image_urls_field_name")).Set(reflect.ValueOf(body.ImageURLs))
-			dstValue.FieldByName(dstValue.Type().Field(i).Tag.Get("decode_video_urls_field_name")).Set(reflect.ValueOf(body.VideoURLs))
+			dstValue.FieldByName(dstValue.Type().Field(ii).Tag.Get("decode_body_field_name")).SetString(body.Body)
+			dstValue.FieldByName(dstValue.Type().Field(ii).Tag.Get("decode_image_urls_field_name")).Set(reflect.ValueOf(body.ImageURLs))
+			dstValue.FieldByName(dstValue.Type().Field(ii).Tag.Get("decode_video_urls_field_name")).Set(reflect.ValueOf(body.VideoURLs))
 		} else if dstFieldDecodeFunction == "string_bytes" {
 			stringField := srcValue.FieldByName(dstFieldDecodeSrcField)
 			stringBytes := stringField.Bytes()
@@ -81,7 +96,7 @@ func CopyStruct(src interface{}, dst interface{}) error {
 		} else if dstFieldDecodeFunction == "nested_value" {
 			structField := srcValue.FieldByName(dstFieldDecodeSrcField)
 			if structField.IsValid() {
-				dstValue.FieldByName(dstFieldName).Set(structField.FieldByName(dstValue.Type().Field(i).Tag.Get("nested_field_name")))
+				dstValue.FieldByName(dstFieldName).Set(structField.FieldByName(dstValue.Type().Field(ii).Tag.Get("nested_field_name")))
 			}
 		} else if dstFieldDecodeFunction == "base_58_check" {
 			fieldValue := srcValue.FieldByName(dstFieldDecodeSrcField)
@@ -123,6 +138,43 @@ func CopyStruct(src interface{}, dst interface{}) error {
 		}
 	}
 	return nil
+}
+
+// Convert timestamp nanos to time.Time.
+func UnixNanoToTime(unixNano uint64) time.Time {
+	return time.Unix(0, int64(unixNano))
+}
+
+// Convert public key bytes to base58check string.
+func PublicKeyBytesToBase58Check(publicKey []byte) string {
+	// If running against testnet data, a different set of params should be used.
+	return lib.PkToString(publicKey, &lib.DeSoMainnetParams)
+}
+
+// Convert public key bytes to base58check string.
+func ConvertRoyaltyMapToByteStrings(royaltyMap map[lib.PKID]uint64) map[string]uint64 {
+	newMap := make(map[string]uint64)
+	for key, value := range royaltyMap {
+		newMap[key.ToString()] = value
+	}
+	return newMap
+}
+
+func DecodeDesoBodySchema(bodyBytes []byte) (*lib.DeSoBodySchema, error) {
+	var body lib.DeSoBodySchema
+	err := json.Unmarshal(bodyBytes, &body)
+	if err != nil {
+		return nil, err
+	}
+	return &body, nil
+}
+
+func ExtraDataBytesToString(extraData map[string][]byte) map[string]string {
+	newMap := make(map[string]string)
+	for key, value := range extraData {
+		newMap[key] = string(value)
+	}
+	return newMap
 }
 
 // DecodeEntry decodes bytes and returns a deso entry struct.

@@ -223,17 +223,8 @@ func (consumer *StateSyncerConsumer) detectAndHandleSyncEvent(stateChangeEntry *
 
 // handleStateChangeEntry handles a state change entry by passing it to the appropriate data handler function.
 func (consumer *StateSyncerConsumer) handleStateChangeEntry(stateChangeEntry *lib.StateChangeEntry) error {
-	// If the entry is a utxo op, pass it to the utxo op handler.
-	// We don't need to pass the entry to the data handler because the utxo op handler will handle the appropriate
-	// disconnect logic for this transaction.
-	if len(stateChangeEntry.UtxoOps) > 0 {
-		if err := consumer.handleUtxoOps(stateChangeEntry); err != nil {
-			return errors.Wrapf(err, "consumer.handleStateChangeEntry: Error handling utxo ops")
-		}
-	} else {
-		if err := consumer.HandleEntryOperationBatch(stateChangeEntry); err != nil {
-			return errors.Wrapf(err, "consumer.handleStateChangeEntry: Error handling entry operation batch")
-		}
+	if err := consumer.HandleEntryOperationBatch(stateChangeEntry); err != nil {
+		return errors.Wrapf(err, "consumer.handleStateChangeEntry: Error handling entry operation batch")
 	}
 	return nil
 }
@@ -290,23 +281,23 @@ func (consumer *StateSyncerConsumer) waitForAllInsertsToComplete() {
 
 // handleUtxoOps handles a state change entry that contains utxo ops. It will translate each utxo op
 // into the appropriate disconnect operation and pass it to be handled by the batch data handler.
-func (consumer *StateSyncerConsumer) handleUtxoOps(stateChangeEntry *lib.StateChangeEntry) error {
-	for _, utxoOp := range stateChangeEntry.UtxoOps {
-		disconnectEncoder, disconnectOperationType, disconnectEncoderType := utxoOpToEncoderAndOperationType(stateChangeEntry, utxoOp)
-		if disconnectOperationType == lib.DbOperationTypeSkip {
-			continue
-		}
-		stateChangeEntry.EncoderType = disconnectEncoderType
-		stateChangeEntry.OperationType = disconnectOperationType
-		stateChangeEntry.Encoder = disconnectEncoder
-		// Handle disconnect db operations via the standard batch handler.
-		err := consumer.HandleEntryOperationBatch(stateChangeEntry)
-		if err != nil {
-			return fmt.Errorf("consumer.handleUtxoOps: Error handling entry batch: %w", err)
-		}
-	}
-	return nil
-}
+//func (consumer *StateSyncerConsumer) handleUtxoOps(stateChangeEntry *lib.StateChangeEntry) error {
+//	for _, utxoOp := range stateChangeEntry.UtxoOps {
+//		disconnectEncoder, disconnectOperationType, disconnectEncoderType := utxoOpToEncoderAndOperationType(stateChangeEntry, utxoOp)
+//		if disconnectOperationType == lib.DbOperationTypeSkip {
+//			continue
+//		}
+//		stateChangeEntry.EncoderType = disconnectEncoderType
+//		stateChangeEntry.OperationType = disconnectOperationType
+//		stateChangeEntry.Encoder = disconnectEncoder
+//		// Handle disconnect db operations via the standard batch handler.
+//		err := consumer.HandleEntryOperationBatch(stateChangeEntry)
+//		if err != nil {
+//			return fmt.Errorf("consumer.handleUtxoOps: Error handling entry batch: %w", err)
+//		}
+//	}
+//	return nil
+//}
 
 // retrieveFileIndexForDbOperation retrieves the byte index in the state change file for the next db operation.
 // It does this by reading the last saved entry index from the entry index file and multiplying it by 4 to get the
