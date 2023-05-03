@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"github.com/deso-protocol/core/lib"
+	"github.com/golang/glog"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"io"
@@ -335,6 +336,10 @@ func (consumer *StateSyncerConsumer) readNextEntryFromFile(isMempool bool) (*lib
 	bytesRead, err := io.ReadFull(reader, buffer)
 	// If there are no bytes to read, return true to signify EOF.
 	if bytesRead == 0 {
+		return nil, true, nil
+	} else if err != nil && err != io.ErrUnexpectedEOF {
+		// If it's an unexpected EOF, log it and return true to signify EOF.
+		glog.Errorf("consumer.readNextEntryFromFile: Error reading from state change file: %v", err)
 		return nil, true, nil
 	} else if err != nil {
 		return nil, false, errors.Wrapf(err, "consumer.readNextEntryFromFile: Error reading from state change file")
