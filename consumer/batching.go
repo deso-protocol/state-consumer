@@ -104,7 +104,7 @@ func (consumer *StateSyncerConsumer) QueueBatch(batchedEntries []*lib.StateChang
 		consumer.DBEntryChannel <- batchedEntries
 	} else {
 		// When not in hypersync, just call the data handler directly.
-		// We don't run transactions concurrently, as transactions may be dependent on each other.
+		// We don't processNewEntriesInFile transactions concurrently, as transactions may be dependent on each other.
 		if err := consumer.callBatchWithRetries(batchedEntries, 0); err != nil {
 			return errors.Wrapf(err, "consumer.QueueBatch: Error calling batch with retries")
 		}
@@ -126,16 +126,8 @@ func (consumer *StateSyncerConsumer) HandleEntryOperationBatch(stateChangeEntry 
 		// If the batched entries do exist, but the batched encoder type and db operation don't match, or the max
 		// batched size has been reached, then do the insert/upsert/delete.
 
-		// This queues the batch to be handled asynchronously, so that multiple batches can be processed at once.
-		if err := consumer.QueueBatch(consumer.BatchedEntries); err != nil {
-			return errors.Wrapf(err, "consumer.HandleEntryOperationBatch: Problem queuing batch")
-		}
-
-		// Save the consumer progress to file.
-		handledEntries := len(UniqueEntries(consumer.BatchedEntries))
-		err := consumer.saveConsumerProgressToFile(consumer.LastScannedIndex + uint32(handledEntries))
-		if err != nil {
-			return errors.Wrapf(err, "consumer.HandleEntryOperationBatch: Problem saving consumer progress to file")
+		if err := consumer.executeBatch(); err != nil {
+			return errors.Wrapf(err, "consumer.HandleEntryOperationBatch: Problem executing batch")
 		}
 	}
 
@@ -144,6 +136,27 @@ func (consumer *StateSyncerConsumer) HandleEntryOperationBatch(stateChangeEntry 
 	consumer.BatchedEntries = []*lib.StateChangeEntry{
 		stateChangeEntry,
 	}
+	return nil
+}
+
+func (consumer *StateSyncerConsumer) executeBatch() error {
+	if consumer.BatchedEntries == nil || len(consumer.BatchedEntries) == 0 {
+		return nil
+	}
+	// This queues the batch to be handled asynchronously, so that multiple batches can be processed at once.
+	if err := consumer.QueueBatch(consumer.BatchedEntries); err != nil {
+		return errors.Wrapf(err, "consumer.HandleEntryOperationBatch: Problem queuing batch")
+	}
+
+	// Save the consumer progress to file.
+	handledEntries := len(UniqueEntries(consumer.BatchedEntries))
+	err := consumer.saveConsumerProgressToFile(consumer.LastScannedIndex + uint32(handledEntries))
+	if err != nil {
+		return errors.Wrapf(err, "consumer.HandleEntryOperationBatch: Problem saving consumer progress to file")
+	}
+	
+	// Reset the batched entries to an empty array after executing them.
+	consumer.BatchedEntries = []*lib.StateChangeEntry{}
 	return nil
 }
 

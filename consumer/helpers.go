@@ -185,11 +185,10 @@ func DecodeEntry(encoder lib.DeSoEncoder, entryBytes []byte) error {
 
 	rr := bytes.NewReader(entryBytes)
 
-	if exists, err := lib.DecodeFromBytes(encoder, rr); exists && err == nil {
-		return nil
-	} else {
+	if _, err := lib.DecodeFromBytes(encoder, rr); err != nil {
 		return errors.Wrapf(err, "Error decoding entry")
 	}
+	return nil
 }
 
 // getUint64FromFile reads the next 4 bytes from the stateChangeFile and returns a uint32.
@@ -217,34 +216,6 @@ func getBytesFromFile(entryByteSize int, file *os.File) ([]byte, error) {
 		return nil, fmt.Errorf("Too few bytes read")
 	}
 	return structBytes, nil
-}
-
-// utxoOpToEncoderAndOperationType returns the encoder and operation type for a given UtxoOperation. This allows the
-// consumer to translate a UtxoOperation into whatever state change operation it should be performing (i.e. upsert or
-// delete), and which values should be passed to that operation. The encoder type is also returned, because for any deletes,
-// the encoder passed back will be nil, thus not allowing the consumer to determine the type of the encoder.
-func utxoOpToEncoderAndOperationType(stateChangeEntry *lib.StateChangeEntry, utxoOp *lib.UtxoOperation) (lib.DeSoEncoder, lib.StateSyncerOperationType, lib.EncoderType) {
-	switch utxoOp.Type {
-	case lib.OperationTypeSubmitPost:
-		return utxoOp.PrevPostEntry, getDisconnectOperationTypeForPrevEntry(utxoOp.PrevPostEntry), lib.EncoderTypePostEntry
-	case lib.OperationTypeUpdateProfile:
-		return utxoOp.PrevProfileEntry, getDisconnectOperationTypeForPrevEntry(utxoOp.PrevProfileEntry), lib.EncoderTypeProfileEntry
-	case lib.OperationTypeLike:
-		return utxoOp.PrevLikeEntry, getDisconnectOperationTypeForPrevEntry(utxoOp.PrevLikeEntry), lib.EncoderTypeLikeEntry
-	case lib.OperationTypeFollow:
-		// Revert the follow based on the original operation type
-		var operationType lib.StateSyncerOperationType
-		if stateChangeEntry.OperationType == lib.DbOperationTypeUpsert {
-			operationType = lib.DbOperationTypeDelete
-		} else {
-			operationType = lib.DbOperationTypeUpsert
-		}
-		return stateChangeEntry.Encoder, operationType, lib.EncoderTypeFollowEntry
-	case lib.OperationTypeDeSoDiamond:
-		return utxoOp.PrevDiamondEntry, getDisconnectOperationTypeForPrevEntry(utxoOp.PrevDiamondEntry), lib.EncoderTypeDiamondEntry
-	default:
-		return nil, lib.DbOperationTypeSkip, lib.EncoderTypeUtxoEntry
-	}
 }
 
 func GetPKIDBytesFromKey(key []byte) []byte {
