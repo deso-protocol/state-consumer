@@ -192,15 +192,15 @@ func DecodeEntry(encoder lib.DeSoEncoder, entryBytes []byte) error {
 }
 
 // getUint64FromFile reads the next 4 bytes from the stateChangeFile and returns a uint32.
-func getUint32FromFile(file *os.File) (uint32, error) {
+func getUint64FromFile(file *os.File) (uint64, error) {
 	// Read the contents of the next 4 bytes from the stateChangeFile into a byte slice.
-	uint32Bytes, err := getBytesFromFile(4, file)
+	uint64Bytes, err := getBytesFromFile(8, file)
 	if err != nil {
 		return 0, err
 	}
 
 	// Use binary package to read a uint16 structSize from the byte slice representing the size of the following struct
-	value := binary.LittleEndian.Uint32(uint32Bytes)
+	value := binary.LittleEndian.Uint64(uint64Bytes)
 	return value, nil
 }
 

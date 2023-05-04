@@ -10,12 +10,15 @@ import (
 	"github.com/pkg/errors"
 	"io"
 	"os"
+	"sync"
 	"time"
 )
 
 // StateSyncerConsumer is a struct that contains the persisted state that is needed to consume state changes from a file.
 // This includes file readers, statuses, batch caches, and channels to facilitate multi-threaded processing.
 type StateSyncerConsumer struct {
+	// TODO: Break this struct into sub-structs so that it's less massive maybe?
+
 	// File that contains the state changes.
 	StateChangeFile       *os.File
 	StateChangeFileReader *bufio.Reader
@@ -32,7 +35,7 @@ type StateSyncerConsumer struct {
 	// File that contains the byte indexes of the state change file that corresponds to db operations.
 	StateChangeIndexFile *os.File
 	// Index of the entry in the state change file that the consumer should start parsing at.
-	LastScannedIndex uint32
+	LastScannedIndex uint64
 	// File that contains the entry index of the last saved state change.
 	ConsumerProgressFile     *os.File
 	ConsumerProgressFileName string
@@ -45,6 +48,7 @@ type StateSyncerConsumer struct {
 	BatchedEntries []*lib.StateChangeEntry
 	// The maximum number of entries to batch before inserting into the database.
 	MaxBatchSize int
+	ThreadLimit  int
 
 	// Track whether we're currently hypersyncing.
 	IsHypersyncing bool
@@ -52,14 +56,15 @@ type StateSyncerConsumer struct {
 	SyncingFromBeginning bool
 
 	// A counter to keep track of how many batches have been inserted.
-	BatchCount int
-	EntryCount uint32
+	BatchCount uint64
+	EntryCount uint64
 
-	// Multi-threading channels
-	// Channel to pass state change entries to the listener.
-	DBEntryChannel chan []*lib.StateChangeEntry
 	// Channel to enforce a max thread limit on the listener.
 	DBBlockingChannel chan bool
+	DBBlockingWG      sync.WaitGroup
+
+	// Indexes to track asynchronous batch handling progress during hypersync.
+	BatchIndexes []*BatchIndexInfo
 }
 
 func (consumer *StateSyncerConsumer) InitializeAndRun(
@@ -94,8 +99,8 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeFileName string, stat
 	consumer.BatchCount = 0
 	consumer.EntryCount = 0
 	consumer.MaxBatchSize = batchSize
+	consumer.ThreadLimit = threadLimit
 	consumer.DataHandler = handler
-	consumer.DBEntryChannel = make(chan []*lib.StateChangeEntry, threadLimit)
 	consumer.DBBlockingChannel = make(chan bool, threadLimit)
 	consumer.AppliedMempoolEntries = make([]*lib.StateChangeEntry, 0)
 	consumer.CurrentMempoolEntryFlushId = uuid.Nil
@@ -103,6 +108,7 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeFileName string, stat
 
 	// Wait for the state changes file to be created. Once it has been created, open it.
 	consumer.waitForStateChangesFile(stateChangeFileName)
+
 	// Create a new reader for the state change file.
 	consumer.StateChangeFileReader = bufio.NewReader(consumer.StateChangeFile)
 
@@ -127,14 +133,17 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeFileName string, stat
 		consumer.ConsumerProgressFile = startEntryIndexFile
 	}
 
+	// Get last entry index that was synced.
+	lastEntrySyncedIdx, err := consumer.retrieveLastSyncedStateChangeEntryIndex()
+	if err != nil {
+		return errors.Wrapf(err, "consumer.initialize: Error retrieving last synced state change entry index")
+	}
+
 	// Discover where we should start parsing the state change file.
-	stateChangeFileByteIndex, err := consumer.retrieveFileIndexForDbOperation()
+	stateChangeFileByteIndex, err := consumer.retrieveFileIndexForDbOperation(lastEntrySyncedIdx)
 	if err != nil {
 		return errors.Wrapf(err, "consumer.intialize: Error retrieving file index for db operation")
 	}
-
-	// TODO: Remove this
-	stateChangeFileByteIndex = 0
 
 	// Seek to the byte index that we should start parsing at.
 	if _, err = consumer.StateChangeFile.Seek(int64(stateChangeFileByteIndex), 0); err != nil {
@@ -201,6 +210,10 @@ func (consumer *StateSyncerConsumer) SyncCommittedEntry(stateChangeEntry *lib.St
 		}
 		// Update the current block sync flush ID.
 		consumer.CurrentConfirmedEntryFlushId = stateChangeEntry.FlushId
+		if !consumer.IsHypersyncing {
+			// Log the handling of the flush.
+			fmt.Println("Now handling flush ", stateChangeEntry.FlushId.String())
+		}
 	}
 	// Detect if this entry represets a sync state change and emit
 	if err := consumer.detectAndHandleSyncEvent(stateChangeEntry); err != nil {
@@ -337,7 +350,7 @@ func (consumer *StateSyncerConsumer) readNextEntryFromFile(isMempool bool) (*lib
 	// If there are no bytes to read, return true to signify EOF.
 	if bytesRead == 0 {
 		return nil, true, nil
-	} else if err != nil && err != io.ErrUnexpectedEOF {
+	} else if err != nil && err == io.ErrUnexpectedEOF {
 		// If it's an unexpected EOF, log it and return true to signify EOF.
 		glog.Errorf("consumer.readNextEntryFromFile: Error reading from state change file: %v", err)
 		return nil, true, nil
@@ -353,7 +366,6 @@ func (consumer *StateSyncerConsumer) readNextEntryFromFile(isMempool bool) (*lib
 		return nil, false, errors.Wrapf(err, "consumer.readNextEntryFromFile: Error decoding entry")
 	}
 
-	consumer.EntryCount++
 	return stateChangeEntry, false, nil
 }
 
@@ -362,17 +374,15 @@ func (consumer *StateSyncerConsumer) detectAndHandleSyncEvent(stateChangeEntry *
 	// Determine if hypersync is beginning or ending.
 	if stateChangeEntry.OperationType == lib.DbOperationTypeInsert && !consumer.IsHypersyncing {
 		consumer.IsHypersyncing = true
-		go consumer.listenForBatchEvents()
 		if err := consumer.DataHandler.HandleSyncEvent(SyncEventHypersyncStart); err != nil {
 			return errors.Wrapf(err, "consumer.detectAndHandleSyncEvent: Error handling hypersync start event")
 		}
 	} else if stateChangeEntry.OperationType != lib.DbOperationTypeInsert && consumer.IsHypersyncing {
 		// If the operation type is not an insert, we must have finished hypersyncing.
 		// First, wait for any remaining batch threads to finish.
-		consumer.waitForAllInsertsToComplete()
+		consumer.DBBlockingWG.Wait()
 		// Set the hypersyncing flag to false and close the channels.
 		consumer.IsHypersyncing = false
-		close(consumer.DBEntryChannel)
 		close(consumer.DBBlockingChannel)
 		if err := consumer.DataHandler.HandleSyncEvent(SyncEventHypersyncComplete); err != nil {
 			return errors.Wrapf(err, "consumer.detectAndHandleSyncEvent: Error handling hypersync complete event")
@@ -433,43 +443,28 @@ func (consumer *StateSyncerConsumer) waitForStateChangesFile(stateChangeFileName
 	}
 }
 
-// waitForAllInsertsToComplete blocks execution until all inserts have been completed. This is necessary because
-// the consumer will exit before all inserts have been completed. This marks the end of hypersync, where inserts
-// can happen asynchronously, and the beginning of blocksync, where inserts must be completed in order due to
-// transaction dependencies.
-func (consumer *StateSyncerConsumer) waitForAllInsertsToComplete() {
-	for {
-		select {
-		case <-consumer.DBBlockingChannel:
-			// Channel has a value, continue waiting for it to be empty
-		default:
-			// Channel is empty, exit the loop
-			return
-		}
+func (consumer *StateSyncerConsumer) retrieveLastSyncedStateChangeEntryIndex() (uint64, error) {
+	// Attempt to open the consumer progress file. If it exists, it should have a single uint32 representing the
+	// last StateChangeEntry index that was processed.
+	if consumer.ConsumerProgressFile != nil {
+		return getUint64FromFile(consumer.ConsumerProgressFile)
 	}
+	return 0, nil
 }
 
 // retrieveFileIndexForDbOperation retrieves the byte index in the state change file for the next db operation.
 // It does this by reading the last saved entry index from the entry index file and multiplying it by 4 to get the
 // byte index in the state change index file.
-func (consumer *StateSyncerConsumer) retrieveFileIndexForDbOperation() (uint32, error) {
-	startEntryIndex := uint32(0)
-	var err error
-	// Attempt to open the consumer progress file. If it exists, it should have a single uint32 representing the
-	// last StateChangeEntry index that was processed.
-	if consumer.ConsumerProgressFile != nil {
-		startEntryIndex, err = getUint32FromFile(consumer.ConsumerProgressFile)
-		if err != nil {
-			return 0, err
-		}
-	}
+func (consumer *StateSyncerConsumer) retrieveFileIndexForDbOperation(startEntryIndex uint64) (uint64, error) {
+	fmt.Printf("Last scanned index: %d\n", startEntryIndex)
+	// TODO: Remove this.
+	startEntryIndex = 0
 	consumer.EntryCount = startEntryIndex
 	consumer.LastScannedIndex = startEntryIndex
-	fmt.Printf("Last scanned index: %d\n", startEntryIndex)
 	// Find the byte index in the state change file for the next db operation. Each entry byte index is represented
-	// in the index file as a uint32. This means the entry byte index exists at its consumer progress index * 4.
-	entryIndexBytes := make([]byte, 4)
-	fileBytesPosition := int64(startEntryIndex * 4)
+	// in the index file as a uint64. This means the entry byte index exists at its consumer progress index * 8.
+	entryIndexBytes := make([]byte, 8)
+	fileBytesPosition := int64(startEntryIndex * 8)
 	bytesRead, err := consumer.StateChangeIndexFile.ReadAt(entryIndexBytes, fileBytesPosition)
 	if err != nil {
 		return 0, errors.Wrapf(err, "consumer.retrieveFileIndexForDbOperation: Error reading from state change index file")
@@ -478,24 +473,19 @@ func (consumer *StateSyncerConsumer) retrieveFileIndexForDbOperation() (uint32, 
 	if bytesRead == 0 {
 		return 0, fmt.Errorf("consumer.retrieveFileIndexForDbOperation: EOF reached")
 	}
-	// If we read a non uint32 number of bytes, something is wrong.
-	if bytesRead < 4 {
+	// If we read a non uint64 number of bytes, something is wrong.
+	if bytesRead < 8 {
 		return 0, fmt.Errorf("consumer.retrieveFileIndexForDbOperation: Too few bytes read")
 	}
 
-	// Use binary package to read a uint32 index from the byte slice representing the index of the db operation.
-	dbIndex := binary.LittleEndian.Uint32(entryIndexBytes)
+	// Use binary package to read a uint64 index from the byte slice representing the index of the db operation.
+	dbIndex := binary.LittleEndian.Uint64(entryIndexBytes)
 	return dbIndex, nil
 }
 
 // saveConsumerProgressToFile saves the last StateChangeEntry index that was processed to the consumer progress file.
 // This is represented as a single uint32 encoded to bytes.
-func (consumer *StateSyncerConsumer) saveConsumerProgressToFile(entryIndex uint32) error {
-	// Don't save progress if we're in hypersync mode.
-	if consumer.IsHypersyncing {
-		return nil
-	}
-
+func (consumer *StateSyncerConsumer) saveConsumerProgressToFile(entryIndex uint64) error {
 	// Create the file if it doesn't exist.
 	file, err := os.Create(consumer.ConsumerProgressFileName)
 	if err != nil {
