@@ -20,7 +20,7 @@ type BatchIndexInfo struct {
 }
 
 // manageBatchedEntries calls the data handler to process a batch of entries, and calculates & logs the current batch progress.
-func (consumer *StateSyncerConsumer) manageBatchedEntries(batchedEntries []*lib.StateChangeEntry, entryCount uint64, batchCount uint64) {
+func (consumer *StateSyncerConsumer) manageBatchedEntries(batchedEntries []*lib.StateChangeEntry, isBatchMempool bool, entryCount uint64, batchCount uint64) {
 	// Call the data handler to process the batch. We do this with retries, in case the data handler fails.
 	err := consumer.callHandlerWithRetries(batchedEntries, 0)
 	if err != nil {
@@ -32,7 +32,8 @@ func (consumer *StateSyncerConsumer) manageBatchedEntries(batchedEntries []*lib.
 		MinEntryIndex: entryCount + uint64(len(batchedEntries)),
 		Index:         batchCount,
 	}
-	consumer.BatchIndexes = insertBatchIndexInOrder(consumer.BatchIndexes, batchInfo)
+	batchIndexes := consumer.BatchIndexes
+	consumer.BatchIndexes = insertBatchIndexInOrder(batchIndexes, batchInfo)
 
 	// Log progress.
 	fmt.Printf("Handled batch %d\n", batchCount)
@@ -45,8 +46,11 @@ func (consumer *StateSyncerConsumer) manageBatchedEntries(batchedEntries []*lib.
 
 	lastConsecutiveBatchEntryIndex := consumer.findLastConsecutiveBatchEntryIndex()
 
-	if err = consumer.saveConsumerProgressToFile(lastConsecutiveBatchEntryIndex); err != nil {
-		glog.Errorf("consumer.manageBatchedEntries: %v", err)
+	if !isBatchMempool {
+		// Save the last consecutive batch entry index to file. This is used to resume from a failed state.
+		if err = consumer.saveConsumerProgressToFile(lastConsecutiveBatchEntryIndex); err != nil {
+			glog.Errorf("consumer.manageBatchedEntries: %v", err)
+		}
 	}
 
 	// Remove a value from the blocking channel to allow the next batch to be processed.
@@ -86,9 +90,9 @@ func (consumer *StateSyncerConsumer) findLastConsecutiveBatchEntryIndex() uint64
 func insertBatchIndexInOrder(batchIndexes []*BatchIndexInfo, newIndexInfo *BatchIndexInfo) []*BatchIndexInfo {
 	// Find the position to insert the newIndexInfo
 	position := -1
-	for i := len(batchIndexes) - 1; i >= 0; i-- {
-		if batchIndexes[i].Index < newIndexInfo.Index {
-			position = i + 1
+	for ii := len(batchIndexes) - 1; ii >= 0; ii-- {
+		if len(batchIndexes) > ii && batchIndexes[ii].Index < newIndexInfo.Index {
+			position = ii + 1
 			break
 		}
 	}
@@ -168,15 +172,18 @@ func (consumer *StateSyncerConsumer) callHandlerWithRetries(batchedEntries []*li
 
 // QueueBatch takes a slice of state change entries and add them to the appropriate channel if we are hypersyncing.
 // If we are not hypersyncing, it calls the data handler directly.
-func (consumer *StateSyncerConsumer) QueueBatch(batchedEntries []*lib.StateChangeEntry) error {
+func (consumer *StateSyncerConsumer) QueueBatch(batchedEntries []*lib.StateChangeEntry, isBatchMempool bool) error {
 	if consumer.IsHypersyncing {
 		// Add bool to blocking channel so that we can block the next batch from being processed if the channel is at capacity.
 		consumer.DBBlockingChannel <- true
 		consumer.DBBlockingWG.Add(1)
 		// Handle the batched entries in a non-blocking way.
-		go consumer.manageBatchedEntries(batchedEntries, consumer.EntryCount, consumer.BatchCount)
-		consumer.BatchCount++
-		consumer.EntryCount += uint64(len(batchedEntries))
+		go consumer.manageBatchedEntries(batchedEntries, isBatchMempool, consumer.EntryCount, consumer.BatchCount)
+		// Only increment counts for non-mempool entries.
+		if !isBatchMempool {
+			consumer.BatchCount++
+			consumer.EntryCount += uint64(len(batchedEntries))
+		}
 
 		//// Add the state change entry batch to the channel so that it can be processed by the listener.
 		//consumer.DBEntryChannel <- batchedEntries
@@ -186,9 +193,13 @@ func (consumer *StateSyncerConsumer) QueueBatch(batchedEntries []*lib.StateChang
 		if err := consumer.callHandlerWithRetries(batchedEntries, 0); err != nil {
 			return errors.Wrapf(err, "consumer.QueueBatch: Error calling batch with retries")
 		}
+		// Skip incrementing the entry count and saving the consumer progress to file if this is a mempool entry.
+		if isBatchMempool {
+			return nil
+		}
 		// If the batch was successfully processed, increment the entry count.
 		consumer.EntryCount += uint64(len(batchedEntries))
-		// Save the consumer progress to file.
+		// Save the consumer progress to file, if this isn't a mempool entry.
 		if err := consumer.saveConsumerProgressToFile(consumer.EntryCount); err != nil {
 			return errors.Wrapf(err, "consumer.QueueBatch: Error saving consumer progress to file")
 		}
@@ -196,10 +207,10 @@ func (consumer *StateSyncerConsumer) QueueBatch(batchedEntries []*lib.StateChang
 	return nil
 }
 
-// HandleEntryOperationBatch handles a batch of state change entries. It will batch entries of the same type and
+// handleStateChangeEntry handles a batch of state change entries. It will batch entries of the same type and
 // encoder type together, and will call the data handler when the batch is full or when the encoder type or db
 // operation changes.
-func (consumer *StateSyncerConsumer) HandleEntryOperationBatch(stateChangeEntry *lib.StateChangeEntry) error {
+func (consumer *StateSyncerConsumer) handleStateChangeEntry(stateChangeEntry *lib.StateChangeEntry, isMempool bool) error {
 	// If the batched entries has been set, isn't empty, and matches the current encoder type and db operation,
 	// and the entry batch isn't past the limit, add to the batch and return.
 	if len(consumer.BatchedEntries) > 0 &&
@@ -207,6 +218,7 @@ func (consumer *StateSyncerConsumer) HandleEntryOperationBatch(stateChangeEntry 
 		stateChangeEntry.EncoderType == consumer.BatchedEntries[0].EncoderType &&
 		len(consumer.BatchedEntries) < consumer.MaxBatchSize {
 		consumer.BatchedEntries = append(consumer.BatchedEntries, stateChangeEntry)
+		consumer.IsBatchMempool = isMempool
 		return nil
 	} else if len(consumer.BatchedEntries) > 0 {
 		// If the batched entries do exist, but the batched encoder type and db operation don't match, or the max
@@ -222,6 +234,7 @@ func (consumer *StateSyncerConsumer) HandleEntryOperationBatch(stateChangeEntry 
 	consumer.BatchedEntries = []*lib.StateChangeEntry{
 		stateChangeEntry,
 	}
+	consumer.IsBatchMempool = isMempool
 	return nil
 }
 
@@ -231,7 +244,7 @@ func (consumer *StateSyncerConsumer) executeBatch() error {
 		return nil
 	}
 	// This queues the batch to be handled asynchronously, so that multiple batches can be processed at once.
-	if err := consumer.QueueBatch(consumer.BatchedEntries); err != nil {
+	if err := consumer.QueueBatch(consumer.BatchedEntries, consumer.IsBatchMempool); err != nil {
 		return errors.Wrapf(err, "consumer.HandleEntryOperationBatch: Problem queuing batch")
 	}
 
