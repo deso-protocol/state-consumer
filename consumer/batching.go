@@ -27,6 +27,8 @@ func (consumer *StateSyncerConsumer) manageBatchedEntries(batchedEntries []*lib.
 		glog.Fatalf("consumer.manageBatchedEntries: %v", err)
 	}
 
+	// Prevent multiple threads from accessing the batch index slice at the same time.
+	consumer.ThreadMutex.Lock()
 	// Upon success, add the batch index info to the batch index slice.
 	batchInfo := &BatchIndexInfo{
 		MinEntryIndex: entryCount + uint64(len(batchedEntries)),
@@ -52,7 +54,7 @@ func (consumer *StateSyncerConsumer) manageBatchedEntries(batchedEntries []*lib.
 			glog.Errorf("consumer.manageBatchedEntries: %v", err)
 		}
 	}
-
+	consumer.ThreadMutex.Unlock()
 	// Remove a value from the blocking channel to allow the next batch to be processed.
 	<-consumer.DBBlockingChannel
 	// Decrement the blocking wait group. This is used at the very end of hypersync to wait for all batches to be processed.
@@ -91,7 +93,7 @@ func insertBatchIndexInOrder(batchIndexes []*BatchIndexInfo, newIndexInfo *Batch
 	// Find the position to insert the newIndexInfo
 	position := -1
 	for ii := len(batchIndexes) - 1; ii >= 0; ii-- {
-		if len(batchIndexes) > ii && batchIndexes[ii].Index < newIndexInfo.Index {
+		if batchIndexes[ii].Index < newIndexInfo.Index {
 			position = ii + 1
 			break
 		}
@@ -211,14 +213,18 @@ func (consumer *StateSyncerConsumer) QueueBatch(batchedEntries []*lib.StateChang
 // encoder type together, and will call the data handler when the batch is full or when the encoder type or db
 // operation changes.
 func (consumer *StateSyncerConsumer) handleStateChangeEntry(stateChangeEntry *lib.StateChangeEntry, isMempool bool) error {
+	batchSize := consumer.BytesInBatch + uint64(len(stateChangeEntry.EncoderBytes))
+
 	// If the batched entries has been set, isn't empty, and matches the current encoder type and db operation,
 	// and the entry batch isn't past the limit, add to the batch and return.
+	//len(consumer.BatchedEntries) < consumer.MaxBatchSize {
 	if len(consumer.BatchedEntries) > 0 &&
 		consumer.BatchedEntries[0].OperationType == stateChangeEntry.OperationType &&
 		stateChangeEntry.EncoderType == consumer.BatchedEntries[0].EncoderType &&
-		len(consumer.BatchedEntries) < consumer.MaxBatchSize {
+		batchSize < consumer.MaxBatchBytes {
 		consumer.BatchedEntries = append(consumer.BatchedEntries, stateChangeEntry)
 		consumer.IsBatchMempool = isMempool
+		consumer.BytesInBatch = batchSize
 		return nil
 	} else if len(consumer.BatchedEntries) > 0 {
 		// If the batched entries do exist, but the batched encoder type and db operation don't match, or the max
@@ -235,6 +241,7 @@ func (consumer *StateSyncerConsumer) handleStateChangeEntry(stateChangeEntry *li
 		stateChangeEntry,
 	}
 	consumer.IsBatchMempool = isMempool
+	consumer.BytesInBatch = uint64(len(stateChangeEntry.EncoderBytes))
 	return nil
 }
 
@@ -250,6 +257,7 @@ func (consumer *StateSyncerConsumer) executeBatch() error {
 
 	// Reset the batched entries to an empty array after executing them.
 	consumer.BatchedEntries = []*lib.StateChangeEntry{}
+	consumer.BytesInBatch = 0
 	return nil
 }
 

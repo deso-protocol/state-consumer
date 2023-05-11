@@ -40,7 +40,6 @@ type StateSyncerConsumer struct {
 	ConsumerProgressFile     *os.File
 	ConsumerProgressFileName string
 
-	// TODO: Make this a slice, so many handlers can be registered and running at once.
 	// The data handler that will be used to process the state changes that the consumer parses.
 	DataHandler StateSyncerDataHandler
 
@@ -48,10 +47,12 @@ type StateSyncerConsumer struct {
 	BatchedEntries []*lib.StateChangeEntry
 	// Whether the batched entries are from a committed block or are from mempool transactions.
 	IsBatchMempool bool
+	BytesInBatch   uint64
 
-	// The maximum number of entries to batch before inserting into the database.
-	MaxBatchSize int
-	ThreadLimit  int
+	// The maximum number of bytes to batch before inserting into the database.
+	MaxBatchBytes uint64
+	ThreadLimit   int
+	ThreadMutex   sync.Mutex
 
 	// Track whether we're currently hypersyncing.
 	IsHypersyncing bool
@@ -71,11 +72,11 @@ type StateSyncerConsumer struct {
 }
 
 func (consumer *StateSyncerConsumer) InitializeAndRun(
-	stateChangeFileName string, stateChangeIndexFileName string, stateChangeMempoolFileName string, consumerProgressFilename string, batchSize int,
+	stateChangeFileName string, stateChangeIndexFileName string, stateChangeMempoolFileName string, consumerProgressFilename string, batchBytes uint64,
 	threadLimit int, handler StateSyncerDataHandler) error {
 	// initialize the consumer
 	err := consumer.initialize(stateChangeFileName, stateChangeIndexFileName, stateChangeMempoolFileName, consumerProgressFilename,
-		batchSize, threadLimit, handler)
+		batchBytes, threadLimit, handler)
 	if err != nil && err.Error() != "EOF" {
 		return errors.Wrapf(err, "consumer.InitializeAndRun: Error initializing consumer")
 	}
@@ -95,13 +96,13 @@ func (consumer *StateSyncerConsumer) InitializeAndRun(
 // Open the state change file and the index file, and determine the byte index that the state syncer should start
 // parsing at.
 func (consumer *StateSyncerConsumer) initialize(stateChangeFileName string, stateChangeIndexFileName string, mempoolFileName string,
-	consumerProgressFilename string, batchSize int, threadLimit int,
+	consumerProgressFilename string, batchBytes uint64, threadLimit int,
 	handler StateSyncerDataHandler) error {
 	// Set up the data handler initial values.
 	consumer.IsHypersyncing = false
 	consumer.BatchCount = 0
 	consumer.EntryCount = 0
-	consumer.MaxBatchSize = batchSize
+	consumer.MaxBatchBytes = batchBytes
 	consumer.ThreadLimit = threadLimit
 	consumer.DataHandler = handler
 	consumer.DBBlockingChannel = make(chan bool, threadLimit)
@@ -379,6 +380,9 @@ func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader
 	if err = DecodeEntry(stateChangeEntry, buffer); err != nil {
 		return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error decoding entry")
 	}
+
+	stateChangeEntry.EncoderBytes = buffer
+
 	return stateChangeEntry, false, nil
 }
 
