@@ -177,7 +177,6 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeFileName string, stat
 }
 
 func (consumer *StateSyncerConsumer) getLastIndexInFile() {
-	fmt.Printf("Starting getting last index\n")
 	fileEOF := false
 	reader := bufio.NewReader(consumer.StateChangeFile)
 	index := 0
@@ -460,6 +459,10 @@ func (consumer *StateSyncerConsumer) detectAndHandleSyncEvent(stateChangeEntry *
 		// Set the hypersyncing flag to false and close the channels.
 		consumer.IsHypersyncing = false
 		close(consumer.DBBlockingChannel)
+		if err := consumer.DataHandler.HandleSyncEvent(SyncEventHypersyncComplete); err != nil {
+			return errors.Wrapf(err, "consumer.detectAndHandleSyncEvent: Error handling hypersync complete event")
+		}
+	} else if consumer.LastScannedIndex == 0 {
 		if err := consumer.DataHandler.HandleSyncEvent(SyncEventHypersyncComplete); err != nil {
 			return errors.Wrapf(err, "consumer.detectAndHandleSyncEvent: Error handling hypersync complete event")
 		}
