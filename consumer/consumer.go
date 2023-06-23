@@ -158,7 +158,7 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeFileName string, stat
 		return errors.Wrapf(err, "consumer.intialize: Error retrieving file index for db operation")
 	}
 
-	//consumer.getLastIndexInFile()
+	consumer.getLastIndexInFile()
 
 	// Seek to the byte index that we should start parsing at.
 	if _, err = consumer.StateChangeFile.Seek(int64(stateChangeFileByteIndex), 0); err != nil {
@@ -462,7 +462,7 @@ func (consumer *StateSyncerConsumer) detectAndHandleSyncEvent(stateChangeEntry *
 		if err := consumer.DataHandler.HandleSyncEvent(SyncEventHypersyncComplete); err != nil {
 			return errors.Wrapf(err, "consumer.detectAndHandleSyncEvent: Error handling hypersync complete event")
 		}
-	} else if consumer.LastScannedIndex == 0 {
+	} else if consumer.LastScannedIndex == 0 && stateChangeEntry.OperationType != lib.DbOperationTypeInsert {
 		if err := consumer.DataHandler.HandleSyncEvent(SyncEventHypersyncComplete); err != nil {
 			return errors.Wrapf(err, "consumer.detectAndHandleSyncEvent: Error handling hypersync complete event")
 		}

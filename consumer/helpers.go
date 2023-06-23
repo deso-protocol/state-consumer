@@ -228,6 +228,14 @@ func GetPKIDBytesFromKey(key []byte) []byte {
 	return key[prefixLen:]
 }
 
+func GetBlockHashBytesFromKey(key []byte) []byte {
+	if len(key) < len(lib.Prefixes.PrefixBlockHashToBlock) {
+		return nil
+	}
+	prefixLen := len(lib.Prefixes.PrefixBlockHashToBlock)
+	return key[prefixLen:]
+}
+
 // getDisconnectOperationTypeForPrevEntry returns the operation type for a given utxoOp entry in order to perform a mempool disconnect.
 // If the encoder is nil, the operation type is delete. Otherwise, it is upsert.
 func getDisconnectOperationTypeForPrevEntry(prevEntry lib.DeSoEncoder) lib.StateSyncerOperationType {
