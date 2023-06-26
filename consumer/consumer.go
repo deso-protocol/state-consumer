@@ -158,8 +158,6 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeFileName string, stat
 		return errors.Wrapf(err, "consumer.intialize: Error retrieving file index for db operation")
 	}
 
-	consumer.getLastIndexInFile()
-
 	// Seek to the byte index that we should start parsing at.
 	if _, err = consumer.StateChangeFile.Seek(int64(stateChangeFileByteIndex), 0); err != nil {
 		return errors.Wrapf(err, "consumer.initialize: Error seeking to byte index")
@@ -174,37 +172,6 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeFileName string, stat
 	}
 
 	return nil
-}
-
-func (consumer *StateSyncerConsumer) getLastIndexInFile() {
-	fileEOF := false
-	reader := bufio.NewReader(consumer.StateChangeFile)
-	index := 0
-	for !fileEOF {
-		buffer := make([]byte, 8)
-		bytesRead, err := io.ReadFull(reader, buffer)
-		if bytesRead == 0 {
-			fmt.Printf("Here is the index: %v\n", index)
-			fileEOF = true
-			break
-		} else if bytesRead < 8 {
-			fmt.Printf("consumer.getLastIndexInFile: Error reading from file: %s", err.Error())
-			return
-		} else if err != nil {
-			if err == io.EOF {
-				fileEOF = true
-			} else {
-				fmt.Printf("consumer.getLastIndexInFile: Error reading from file: %s", err.Error())
-				return
-			}
-		}
-
-		if index%1000000 == 0 {
-			fmt.Printf("Just read index %v\n", index)
-		}
-		index++
-	}
-	fmt.Printf("Finished reading file, last index: %v\n", index)
 }
 
 // processNewEntriesInFile reads the state change file and passes each entry to the data handler.
