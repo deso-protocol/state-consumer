@@ -17,8 +17,6 @@ import (
 // StateSyncerConsumer is a struct that contains the persisted state that is needed to consume state changes from a file.
 // This includes file readers, statuses, batch caches, and channels to facilitate multi-threaded processing.
 type StateSyncerConsumer struct {
-	// TODO: Break this struct into sub-structs so that it's less massive maybe?
-
 	// File that contains the state changes.
 	StateChangeFile       *os.File
 	StateChangeFileReader *bufio.Reader
@@ -362,10 +360,8 @@ func (consumer *StateSyncerConsumer) retrieveNextEntry(isMempool bool) (*lib.Sta
 		file = consumer.StateChangeFile
 	}
 
-	// TODO: Move this logic to a helper function.
 	// If mempool, check first entry to see if the flush ID has changed.
 	if isMempool {
-		// TODO: Move this logic to a helper function.
 		// Get the current position in the mempool file
 		currentPos, err := consumer.StateChangeMempoolFile.Seek(0, io.SeekCurrent)
 		if err != nil {
@@ -374,7 +370,6 @@ func (consumer *StateSyncerConsumer) retrieveNextEntry(isMempool bool) (*lib.Sta
 		if _, err = consumer.StateChangeMempoolFile.Seek(0, io.SeekStart); err != nil {
 			return nil, false, errors.Wrapf(err, "consumer.retrieveNextEntry: Error seeking to start of mempool file")
 		}
-		// TODO: this should use readAndDecodeNextEntry
 		// Read the first mempool entry to see if the flush ID has changed.
 		firstEntryReader := bufio.NewReader(consumer.StateChangeMempoolFile)
 		mempoolFirstEntry, eof, err := consumer.readAndDecodeNextEntry(firstEntryReader, consumer.StateChangeMempoolFile)
@@ -390,7 +385,6 @@ func (consumer *StateSyncerConsumer) retrieveNextEntry(isMempool bool) (*lib.Sta
 		}
 		// If the flush ID has changed, revert the current mempool entries and reset the mempool reader.
 		if mempoolFirstEntry.FlushId != consumer.CurrentMempoolEntryFlushId {
-			// TODO: Move this logic to a helper function.
 			if err = consumer.RevertMempoolEntries(); err != nil {
 				return nil, false, errors.Wrapf(err, "consumer.retrieveNextEntry: Error reverting mempool entries")
 			}
@@ -399,6 +393,7 @@ func (consumer *StateSyncerConsumer) retrieveNextEntry(isMempool bool) (*lib.Sta
 			// Reset the mempool reader, so that the next entry read will be the first entry in the new flush.
 			consumer.StateChangeMempoolFile.Seek(0, io.SeekStart)
 			consumer.StateChangeMempoolFileReader = bufio.NewReader(consumer.StateChangeMempoolFile)
+			// Set the reader to the newly reset mempool file reader.
 			reader = consumer.StateChangeMempoolFileReader
 		}
 	}
@@ -542,7 +537,6 @@ func (consumer *StateSyncerConsumer) saveConsumerProgressToFile(entryIndex uint6
 }
 
 func (consumer *StateSyncerConsumer) saveMempoolProgressToFile(mempoolStateChangeEntry *lib.StateChangeEntry) error {
-	// TODO: Make mempool file name a constant.
 	mempoolStatusFilename := consumer.ConsumerProgressFileName + "-mempool"
 
 	// Create the file if it doesn't exist.
