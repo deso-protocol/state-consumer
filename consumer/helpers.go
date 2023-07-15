@@ -228,6 +228,22 @@ func GetPKIDBytesFromKey(key []byte) []byte {
 	return key[prefixLen:]
 }
 
+func GetAccessGroupMemberFieldsFromKey(key []byte) (accessGroupMemberPublicKey []byte, accessGroupOwnerPublicKey []byte, accessGroupKeyName []byte, err error) {
+
+	prefixLen := len(lib.Prefixes.PrefixAccessGroupMembershipIndex)
+	totalKeyLen := prefixLen + lib.PublicKeyLenCompressed*2 + lib.MaxAccessGroupKeyNameCharacters
+
+	if len(key) < totalKeyLen {
+		return nil, nil, nil, errors.New("key length is less than expected")
+	}
+
+	accessGroupMemberPublicKey = key[prefixLen : prefixLen+lib.PublicKeyLenCompressed]
+	accessGroupOwnerPublicKey = key[prefixLen+lib.PublicKeyLenCompressed : prefixLen+lib.PublicKeyLenCompressed*2]
+	accessGroupKeyName = key[prefixLen+lib.PublicKeyLenCompressed*2 : totalKeyLen]
+
+	return accessGroupMemberPublicKey, accessGroupOwnerPublicKey, accessGroupKeyName, nil
+}
+
 func GetBlockHashBytesFromKey(key []byte) []byte {
 	if len(key) < len(lib.Prefixes.PrefixBlockHashToBlock) {
 		return nil
@@ -323,8 +339,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 			DeSoToSellNanos:        realTxMeta.DeSoToSellNanos,
 			CreatorCoinToSellNanos: realTxMeta.CreatorCoinToSellNanos,
 			DeSoToAddNanos:         realTxMeta.DeSoToAddNanos,
-			// TODO: Is there a way to get this value? I guess we'd have to get the current profile entry, which seems slow
-			DESOLockedNanosDiff: desoLockedNanosDiff,
+			DESOLockedNanosDiff:    desoLockedNanosDiff,
 		}
 
 		// Set the type of the operation.
