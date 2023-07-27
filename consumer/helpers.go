@@ -841,6 +841,14 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 			SerialNumber:   realTxMeta.SerialNumber,
 		}
 	case lib.TxnTypeBasicTransfer:
+		// Add the public key of the receiver to the affected public keys.
+		utxoOp := getUtxoOpByOperationType(utxoOps, lib.OperationTypeAddBalance)
+		if utxoOp != nil {
+			txnMeta.AffectedPublicKeys = append(txnMeta.AffectedPublicKeys, &lib.AffectedPublicKey{
+				PublicKeyBase58Check: lib.PkToString(utxoOp.BalancePublicKey, params),
+				Metadata:             "BasicTransferAddBalancePublicKeyBase58Check",
+			})
+		}
 		diamondLevelBytes, hasDiamondLevel := txn.ExtraData[lib.DiamondLevelKey]
 		diamondPostHash, hasDiamondPostHash := txn.ExtraData[lib.DiamondPostHashKey]
 		if hasDiamondLevel && hasDiamondPostHash {
