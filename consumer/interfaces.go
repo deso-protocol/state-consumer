@@ -11,7 +11,8 @@ const (
 	SyncEventHypersyncStart    SyncEvent = 1
 	SyncEventHypersyncComplete SyncEvent = 2
 	// TODO: implement this. Should fire when the consumer has caught up to the tip.
-	SyncEventComplete SyncEvent = 3
+	SyncEventComplete       SyncEvent = 3
+	SyncEventBlocksyncStart SyncEvent = 4
 )
 
 // The StateSyncerDataHandler interface is implemented by the data handler implementation. It is used by the

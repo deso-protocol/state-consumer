@@ -169,6 +169,12 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeFileName string, stat
 		}
 	}
 
+	// Check if we are starting a block sync, emit an event if so.
+	err = consumer.checkBlockSyncStart()
+	if err != nil {
+		return errors.Wrapf(err, "consumer.initialize: Error checking block sync start")
+	}
+
 	return nil
 }
 
@@ -209,7 +215,7 @@ func (consumer *StateSyncerConsumer) processNewEntriesInFile(isMempool bool) err
 	}
 
 	// If we are syncing from the beginning, emit a sync end event.
-	if consumer.SyncingFromBeginning && !isMempool {
+	if consumer.SyncingFromBeginning && !isMempool && !consumer.IsHypersyncing {
 		consumer.SyncingFromBeginning = false
 		if err := consumer.DataHandler.HandleSyncEvent(SyncEventComplete); err != nil {
 			return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error handling sync end event")
@@ -425,8 +431,14 @@ func (consumer *StateSyncerConsumer) detectAndHandleSyncEvent(stateChangeEntry *
 		if err := consumer.DataHandler.HandleSyncEvent(SyncEventHypersyncComplete); err != nil {
 			return errors.Wrapf(err, "consumer.detectAndHandleSyncEvent: Error handling hypersync complete event")
 		}
+		if err := consumer.DataHandler.HandleSyncEvent(SyncEventBlocksyncStart); err != nil {
+			return errors.Wrapf(err, "consumer.detectAndHandleSyncEvent: Error handling hypersync complete event")
+		}
 	} else if consumer.LastScannedIndex == 0 && stateChangeEntry.OperationType != lib.DbOperationTypeInsert {
 		if err := consumer.DataHandler.HandleSyncEvent(SyncEventHypersyncComplete); err != nil {
+			return errors.Wrapf(err, "consumer.detectAndHandleSyncEvent: Error handling hypersync complete event")
+		}
+		if err := consumer.DataHandler.HandleSyncEvent(SyncEventBlocksyncStart); err != nil {
 			return errors.Wrapf(err, "consumer.detectAndHandleSyncEvent: Error handling hypersync complete event")
 		}
 	}
@@ -515,6 +527,44 @@ func (consumer *StateSyncerConsumer) retrieveFileIndexForDbOperation(startEntryI
 	// Use binary package to read a uint64 index from the byte slice representing the index of the db operation.
 	dbIndex := binary.LittleEndian.Uint64(entryIndexBytes)
 	return dbIndex, nil
+}
+
+// peekNextStateChangeEntry reads the next entry from the state change file without advancing the file pointer.
+func (consumer *StateSyncerConsumer) peekNextStateChangeEntry(reader *bufio.Reader, file *os.File) (*lib.StateChangeEntry, error) {
+	// Get the current byte position in the state change file.
+	currentPos, err := file.Seek(0, io.SeekCurrent)
+
+	// Read the next entry from the state change file.
+	stateChangeEntry, _, err := consumer.readAndDecodeNextEntry(reader, file)
+	if err != nil {
+		return nil, errors.Wrapf(err, "consumer.peekNextStateChangeEntry: Error reading next entry")
+	}
+
+	// Seek back to the original position in the file.
+	if _, err = consumer.StateChangeMempoolFile.Seek(currentPos, io.SeekStart); err != nil {
+		return nil, errors.Wrapf(err, "consumer.retrieveNextEntry: Error seeking to current position in mempool file")
+	}
+
+	return stateChangeEntry, nil
+}
+
+// checkBlockSyncStart checks if the next entry in the state change file is a blocksync event. If it is, emit a
+// SyncEventBlocksyncStart event to the data handler.
+func (consumer *StateSyncerConsumer) checkBlockSyncStart() error {
+	// Peek at the next state change entry
+	nextStateChangeEntry, err := consumer.peekNextStateChangeEntry(consumer.StateChangeFileReader, consumer.StateChangeFile)
+	if err != nil {
+		return errors.Wrapf(err, "consumer.checkBlockSyncStart: Error peeking at next state change entry")
+	}
+	if nextStateChangeEntry == nil {
+		return nil
+	}
+	if nextStateChangeEntry.OperationType != lib.DbOperationTypeInsert {
+		if err = consumer.DataHandler.HandleSyncEvent(SyncEventBlocksyncStart); err != nil {
+			return errors.Wrapf(err, "consumer.detectAndHandleSyncEvent: Error handling blocksync start event")
+		}
+	}
+	return nil
 }
 
 // saveConsumerProgressToFile saves the last StateChangeEntry index that was processed to the consumer progress file.
