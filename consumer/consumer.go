@@ -317,6 +317,7 @@ func (consumer *StateSyncerConsumer) RevertMempoolEntries() error {
 	return nil
 }
 
+// readAndDecodeNextEntry reads the next state change entry from the state change file and decodes it as a deso encoder.
 func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader, file *os.File) (*lib.StateChangeEntry, bool, error) {
 	// Get the current position in the file
 	currentPos, err := file.Seek(0, io.SeekCurrent)
@@ -489,6 +490,8 @@ func (consumer *StateSyncerConsumer) waitForStateChangesFile(stateChangeFileName
 	}
 }
 
+// retrieveLastSyncedStateChangeEntryIndex looks up the last synced state change entry index from the consumer progress file.
+// This is used to determine where to start scanning the state changes file from after a restart.
 func (consumer *StateSyncerConsumer) retrieveLastSyncedStateChangeEntryIndex() (uint64, error) {
 	// Attempt to open the consumer progress file. If it exists, it should have a single uint32 representing the
 	// last StateChangeEntry index that was processed.
@@ -586,6 +589,7 @@ func (consumer *StateSyncerConsumer) saveConsumerProgressToFile(entryIndex uint6
 	return nil
 }
 
+// saveMempoolProgressToFile appends the last applied mempool entry to the mempool progress file.
 func (consumer *StateSyncerConsumer) saveMempoolProgressToFile(mempoolStateChangeEntry *lib.StateChangeEntry) error {
 	mempoolStatusFilename := consumer.ConsumerProgressFileName + "-mempool"
 
@@ -604,6 +608,8 @@ func (consumer *StateSyncerConsumer) saveMempoolProgressToFile(mempoolStateChang
 	return nil
 }
 
+// revertStoredMempoolTransactions extracts all applied mempool entries from the mempool progress file and reverts them.
+// This is used when re-starting the state syncer, so that the database is able to revert back to the last known chain-state.
 func (consumer *StateSyncerConsumer) revertStoredMempoolTransactions() error {
 	mempoolStatusFilename := consumer.ConsumerProgressFileName + "-mempool"
 	// Create the file if it doesn't exist.
@@ -642,6 +648,7 @@ func (consumer *StateSyncerConsumer) revertStoredMempoolTransactions() error {
 	return nil
 }
 
+// truncateMempoolProgressFile truncates the mempool progress file to 0 bytes.
 func (consumer *StateSyncerConsumer) truncateMempoolProgressFile() error {
 	mempoolStatusFilename := consumer.ConsumerProgressFileName + "-mempool"
 	// Create the file if it doesn't exist.
