@@ -13,6 +13,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/uptrace/bun/extra/bunbig"
 	"os"
+	"path/filepath"
 	"reflect"
 	"time"
 )
@@ -140,6 +141,14 @@ func CopyStruct(src interface{}, dst interface{}) error {
 		}
 	}
 	return nil
+}
+
+func createDirAndFile(filePath string) (*os.File, error) {
+	dir := filepath.Dir(filePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, errors.Wrapf(err, "Error creating directory:")
+	}
+	return os.Create(filePath)
 }
 
 // Convert timestamp nanos to time.Time.

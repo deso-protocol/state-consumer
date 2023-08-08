@@ -10,8 +10,13 @@ import (
 	"github.com/pkg/errors"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
+)
+
+const (
+	ConsumerProgressFilename = "consumer-progress.bin"
 )
 
 // StateSyncerConsumer is a struct that contains the persisted state that is needed to consume state changes from a file.
@@ -35,8 +40,8 @@ type StateSyncerConsumer struct {
 	// Index of the entry in the state change file that the consumer should start parsing at.
 	LastScannedIndex uint64
 	// File that contains the entry index of the last saved state change.
-	ConsumerProgressFile     *os.File
-	ConsumerProgressFileName string
+	ConsumerProgressFile *os.File
+	ConsumerProgressDir  string
 
 	// The data handler that will be used to process the state changes that the consumer parses.
 	DataHandler StateSyncerDataHandler
@@ -70,11 +75,10 @@ type StateSyncerConsumer struct {
 }
 
 func (consumer *StateSyncerConsumer) InitializeAndRun(
-	stateChangeFileName string, stateChangeIndexFileName string, stateChangeMempoolFileName string, consumerProgressFilename string, batchBytes uint64,
+	stateChangeDir string, consumerProgressFilename string, batchBytes uint64,
 	threadLimit int, handler StateSyncerDataHandler) error {
 	// initialize the consumer
-	err := consumer.initialize(stateChangeFileName, stateChangeIndexFileName, stateChangeMempoolFileName, consumerProgressFilename,
-		batchBytes, threadLimit, handler)
+	err := consumer.initialize(stateChangeDir, consumerProgressFilename, batchBytes, threadLimit, handler)
 	if err != nil && err.Error() != "EOF" {
 		return errors.Wrapf(err, "consumer.InitializeAndRun: Error initializing consumer")
 	}
@@ -93,9 +97,7 @@ func (consumer *StateSyncerConsumer) InitializeAndRun(
 
 // Open the state change file and the index file, and determine the byte index that the state syncer should start
 // parsing at.
-func (consumer *StateSyncerConsumer) initialize(stateChangeFileName string, stateChangeIndexFileName string, mempoolFileName string,
-	consumerProgressFilename string, batchBytes uint64, threadLimit int,
-	handler StateSyncerDataHandler) error {
+func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerProgressDir string, batchBytes uint64, threadLimit int, handler StateSyncerDataHandler) error {
 	// Set up the data handler initial values.
 	consumer.IsHypersyncing = false
 	consumer.BatchCount = 0
@@ -108,14 +110,18 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeFileName string, stat
 	consumer.CurrentMempoolEntryFlushId = uuid.Nil
 	consumer.CurrentConfirmedEntryFlushId = uuid.Nil
 
+	stateChangeFilePath := filepath.Join(stateChangeDir, lib.StateChangeFileName)
+	stateChangeIndexFilePath := filepath.Join(stateChangeDir, lib.StateChangeIndexFileName)
+	stateChangeMempoolFilePath := filepath.Join(stateChangeDir, lib.StateChangeMempoolFileName)
+
 	// Wait for the state changes file to be created. Once it has been created, open it.
-	consumer.waitForStateChangesFile(stateChangeFileName)
+	consumer.waitForStateChangesFile(stateChangeFilePath)
 
 	// Create a new reader for the state change file.
 	consumer.StateChangeFileReader = bufio.NewReader(consumer.StateChangeFile)
 
 	// Create a new reader for the mempool file.
-	if stateChangeMempoolFile, err := os.Open(mempoolFileName); err == nil {
+	if stateChangeMempoolFile, err := os.Open(stateChangeMempoolFilePath); err == nil {
 		consumer.StateChangeMempoolFile = stateChangeMempoolFile
 		consumer.StateChangeMempoolFileReader = bufio.NewReader(consumer.StateChangeMempoolFile)
 	} else {
@@ -123,15 +129,17 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeFileName string, stat
 	}
 
 	// Open the file that contains byte indexes for each entry in the state changes file.
-	indexFile, err := os.Open(stateChangeIndexFileName)
+	indexFile, err := os.Open(stateChangeIndexFilePath)
 	if err != nil {
 		return errors.Wrapf(err, "consumer.initialize: Error opening indexFile")
 	}
 	consumer.StateChangeIndexFile = indexFile
 
 	// Open the file that contains the entry index of the last saved state change.
-	consumer.ConsumerProgressFileName = consumerProgressFilename
-	if consumerProgressFile, err := os.Open(consumerProgressFilename); err == nil {
+	consumer.ConsumerProgressDir = consumerProgressDir
+	consumerProgressFilePath := filepath.Join(consumerProgressDir, ConsumerProgressFilename)
+
+	if consumerProgressFile, err := os.Open(consumerProgressFilePath); err == nil {
 		consumer.ConsumerProgressFile = consumerProgressFile
 	}
 
@@ -573,17 +581,18 @@ func (consumer *StateSyncerConsumer) checkBlockSyncStart() error {
 // saveConsumerProgressToFile saves the last StateChangeEntry index that was processed to the consumer progress file.
 // This is represented as a single uint32 encoded to bytes.
 func (consumer *StateSyncerConsumer) saveConsumerProgressToFile(entryIndex uint64) error {
+	consumerProgressFilepath := filepath.Join(consumer.ConsumerProgressDir, ConsumerProgressFilename)
 	// Create the file if it doesn't exist.
-	file, err := os.Create(consumer.ConsumerProgressFileName)
+	file, err := createDirAndFile(consumerProgressFilepath)
 	if err != nil {
-		return errors.Wrapf(err, "consumer.saveConsumerProgressToFile: Error creating consumer progress file: %s", consumer.ConsumerProgressFileName)
+		return errors.Wrapf(err, "consumer.saveConsumerProgressToFile: Error creating consumer progress file: %s", consumer.ConsumerProgressDir)
 	}
 	defer file.Close()
 
 	// Write the entry index to the file.
 	err = binary.Write(file, binary.LittleEndian, entryIndex)
 	if err != nil {
-		return errors.Wrapf(err, "consumer.saveConsumerProgressToFile: Error writing entry index to consumer progress file: %s", consumer.ConsumerProgressFileName)
+		return errors.Wrapf(err, "consumer.saveConsumerProgressToFile: Error writing entry index to consumer progress file: %s", consumer.ConsumerProgressDir)
 	}
 	consumer.LastScannedIndex = entryIndex
 	return nil
@@ -591,19 +600,19 @@ func (consumer *StateSyncerConsumer) saveConsumerProgressToFile(entryIndex uint6
 
 // saveMempoolProgressToFile appends the last applied mempool entry to the mempool progress file.
 func (consumer *StateSyncerConsumer) saveMempoolProgressToFile(mempoolStateChangeEntry *lib.StateChangeEntry) error {
-	mempoolStatusFilename := consumer.ConsumerProgressFileName + "-mempool"
+	mempoolStatusFilepath := filepath.Join(consumer.ConsumerProgressDir, lib.StateChangeMempoolFileName)
 
 	// Create the file if it doesn't exist.
-	file, err := os.Create(mempoolStatusFilename)
+	file, err := createDirAndFile(mempoolStatusFilepath)
 	if err != nil {
-		return errors.Wrapf(err, "consumer.saveConsumerProgressToFile: Error creating applied mempool entries file: %s", consumer.ConsumerProgressFileName)
+		return errors.Wrapf(err, "consumer.saveConsumerProgressToFile: Error creating applied mempool entries file: %s", consumer.ConsumerProgressDir)
 	}
 	defer file.Close()
 
 	mempoolEntryBytes := lib.EncodeByteArray(lib.EncodeToBytes(mempoolStateChangeEntry.BlockHeight, mempoolStateChangeEntry))
 
 	if _, err := file.Write(mempoolEntryBytes); err != nil {
-		return errors.Wrapf(err, "consumer.saveConsumerProgressToFile: Error writing to applied mempool entries: %s", consumer.ConsumerProgressFileName)
+		return errors.Wrapf(err, "consumer.saveConsumerProgressToFile: Error writing to applied mempool entries: %s", consumer.ConsumerProgressDir)
 	}
 	return nil
 }
@@ -611,14 +620,14 @@ func (consumer *StateSyncerConsumer) saveMempoolProgressToFile(mempoolStateChang
 // revertStoredMempoolTransactions extracts all applied mempool entries from the mempool progress file and reverts them.
 // This is used when re-starting the state syncer, so that the database is able to revert back to the last known chain-state.
 func (consumer *StateSyncerConsumer) revertStoredMempoolTransactions() error {
-	mempoolStatusFilename := consumer.ConsumerProgressFileName + "-mempool"
+	mempoolStatusFilepath := filepath.Join(consumer.ConsumerProgressDir, lib.StateChangeMempoolFileName)
 	// Create the file if it doesn't exist.
-	file, err := os.Open(mempoolStatusFilename)
+	file, err := os.Open(mempoolStatusFilepath)
 	if os.IsNotExist(err) {
 		// If the file doesn't exist, we can assume there were no mempool transactions to revert.
 		return nil
 	} else if err != nil {
-		return errors.Wrapf(err, "consumer.revertStoredMempoolTransactions: Error opening applied mempool entries file: %s", consumer.ConsumerProgressFileName)
+		return errors.Wrapf(err, "consumer.revertStoredMempoolTransactions: Error opening applied mempool entries file: %s", consumer.ConsumerProgressDir)
 	}
 	defer file.Close()
 
@@ -633,7 +642,7 @@ func (consumer *StateSyncerConsumer) revertStoredMempoolTransactions() error {
 		if fileEof {
 			break
 		} else if err != nil {
-			return errors.Wrapf(err, "consumer.revertStoredMempoolTransactions: Error reading from applied mempool entries file: %s", consumer.ConsumerProgressFileName)
+			return errors.Wrapf(err, "consumer.revertStoredMempoolTransactions: Error reading from applied mempool entries file: %s", consumer.ConsumerProgressDir)
 		}
 		mempoolEntries = append(mempoolEntries, mempoolEntry)
 	}
@@ -642,7 +651,7 @@ func (consumer *StateSyncerConsumer) revertStoredMempoolTransactions() error {
 	for i := len(mempoolEntries) - 1; i >= 0; i-- {
 		mempoolEntry := mempoolEntries[i]
 		if err := consumer.RevertMempoolEntry(mempoolEntry); err != nil {
-			return errors.Wrapf(err, "consumer.revertStoredMempoolTransactions: Error reverting mempool entry: %s", consumer.ConsumerProgressFileName)
+			return errors.Wrapf(err, "consumer.revertStoredMempoolTransactions: Error reverting mempool entry: %s", consumer.ConsumerProgressDir)
 		}
 	}
 	return nil
@@ -650,19 +659,19 @@ func (consumer *StateSyncerConsumer) revertStoredMempoolTransactions() error {
 
 // truncateMempoolProgressFile truncates the mempool progress file to 0 bytes.
 func (consumer *StateSyncerConsumer) truncateMempoolProgressFile() error {
-	mempoolStatusFilename := consumer.ConsumerProgressFileName + "-mempool"
+	mempoolStatusFilepath := filepath.Join(consumer.ConsumerProgressDir, lib.StateChangeMempoolFileName)
 	// Create the file if it doesn't exist.
-	file, err := os.Create(mempoolStatusFilename)
+	file, err := createDirAndFile(mempoolStatusFilepath)
 	if os.IsNotExist(err) {
 		// If the file doesn't exist, we can assume there were no mempool transactions to revert.
 		return nil
 	} else if err != nil {
-		return errors.Wrapf(err, "consumer.truncateMempoolProgressFile: Error creating applied mempool entries file: %s", consumer.ConsumerProgressFileName)
+		return errors.Wrapf(err, "consumer.truncateMempoolProgressFile: Error creating applied mempool entries file: %s", consumer.ConsumerProgressDir)
 	}
 	defer file.Close()
 
 	if err := file.Truncate(0); err != nil {
-		return errors.Wrapf(err, "consumer.truncateMempoolProgressFile: Error truncating applied mempool entries file: %s", consumer.ConsumerProgressFileName)
+		return errors.Wrapf(err, "consumer.truncateMempoolProgressFile: Error truncating applied mempool entries file: %s", consumer.ConsumerProgressDir)
 	}
 	return nil
 }

@@ -13,10 +13,20 @@ const (
 	retryLimit = 10
 )
 
-// BatchIndex is a struct that contains the index of the first entry in a batch, and the batch's index relative to all other executed batches.
+// BatchIndex is a struct that index information for both the batch itself, and the entries within the batch.
+// Batches are formed by grouping entries of the same encoder type and db operation type together.
+// They are only formed when these groupings occur naturally in the order of the state change file, the ordering
+// of entries within the file are never changed in order to form batches.
+// They have a max batch size defined by the `batchBytes` parameter in the config.
 type BatchIndexInfo struct {
+	// MinEntryIndex is the index of the first entry in the batch within the state change entry file.
+	// For example, with batches containing 100 entries, the first batch would have a MinEntryIndex of 0, the second
+	// would have a MinEntryIndex of 100, etc.
 	MinEntryIndex uint64
-	Index         uint64
+	// Index tracks which batch this is relative to all other executed batches.
+	// For example, with batches containing 100 entries, the first batch would have an Index of 0, the second would
+	// have an Index of 1, etc.
+	Index uint64
 }
 
 // manageBatchedEntries calls the data handler to process a batch of entries, and calculates & logs the current batch progress.
@@ -28,33 +38,37 @@ func (consumer *StateSyncerConsumer) manageBatchedEntries(batchedEntries []*lib.
 	}
 
 	// Prevent multiple threads from accessing the batch index slice at the same time.
-	consumer.ThreadMutex.Lock()
-	// Upon success, add the batch index info to the batch index slice.
-	batchInfo := &BatchIndexInfo{
-		MinEntryIndex: entryCount + uint64(len(batchedEntries)),
-		Index:         batchCount,
-	}
-	batchIndexes := consumer.BatchIndexes
-	consumer.BatchIndexes = insertBatchIndexInOrder(batchIndexes, batchInfo)
-
-	// Log progress.
-	fmt.Printf("Handled batch %d\n", batchCount)
-
-	// If the number of batches is greater than the thread limit, remove the first batch index from the slice.
-	// We know that anything outside the bounds of the thread limit must have already been processed successfully.
-	if len(consumer.BatchIndexes) > consumer.ThreadLimit {
-		consumer.BatchIndexes = consumer.BatchIndexes[1:]
-	}
-
-	lastConsecutiveBatchEntryIndex := consumer.findLastConsecutiveBatchEntryIndex()
-
-	if !isBatchMempool {
-		// Save the last consecutive batch entry index to file. This is used to resume from a failed state.
-		if err = consumer.saveConsumerProgressToFile(lastConsecutiveBatchEntryIndex); err != nil {
-			glog.Errorf("consumer.manageBatchedEntries: %v", err)
+	// Use an inner function to unlock the mutex with a defer statement.
+	func() {
+		consumer.ThreadMutex.Lock()
+		defer consumer.ThreadMutex.Unlock()
+		// Upon success, add the batch index info to the batch index slice.
+		batchInfo := &BatchIndexInfo{
+			MinEntryIndex: entryCount + uint64(len(batchedEntries)),
+			Index:         batchCount,
 		}
-	}
-	consumer.ThreadMutex.Unlock()
+		batchIndexes := consumer.BatchIndexes
+		consumer.BatchIndexes = insertBatchIndexInOrder(batchIndexes, batchInfo)
+
+		// Log progress.
+		fmt.Printf("Handled batch %d\n", batchCount)
+
+		// If the number of batches is greater than the thread limit, remove the first batch index from the slice.
+		// We know that anything outside the bounds of the thread limit must have already been processed successfully.
+		if len(consumer.BatchIndexes) > consumer.ThreadLimit {
+			consumer.BatchIndexes = consumer.BatchIndexes[1:]
+		}
+
+		lastConsecutiveBatchEntryIndex := consumer.findLastConsecutiveBatchEntryIndex()
+
+		if !isBatchMempool {
+			// Save the last consecutive batch entry index to file. This is used to resume from a failed state.
+			if err = consumer.saveConsumerProgressToFile(lastConsecutiveBatchEntryIndex); err != nil {
+				glog.Errorf("consumer.manageBatchedEntries: %v", err)
+			}
+		}
+	}()
+
 	// Remove a value from the blocking channel to allow the next batch to be processed.
 	<-consumer.DBBlockingChannel
 	// Decrement the blocking wait group. This is used at the very end of hypersync to wait for all batches to be processed.
