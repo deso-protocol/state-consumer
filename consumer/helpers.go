@@ -340,7 +340,15 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		if prevCoinEntry == nil {
 			glog.Errorf("Update TxIndex: missing DESOLockedNanosDiff error: %v", txn.Hash().String())
 		} else {
-			desoLockedNanosDiff = int64(stateChangeMetadata.ProfileEntry.CreatorCoinEntry.DeSoLockedNanos - prevCoinEntry.DeSoLockedNanos)
+			if PublicKeyBytesToBase58Check(txn.PublicKey[:]) == "BC1YLiUro1G14Zqv5bmB62ZfF9fJEdcidbCDvW1r8iNDdp5qikuNDoe" {
+				fmt.Printf("\n\n****Txn pub key: %v\n", PublicKeyBytesToBase58Check(txn.PublicKey[:]))
+				fmt.Printf("\n\nTxn meta: %+v\n", txnMeta)
+				fmt.Printf("prevCoinEntry: %+v\n", prevCoinEntry)
+				fmt.Printf("Prof entry: %+v\n", stateChangeMetadata.ProfileDeSoLockedNanos)
+				fmt.Printf("prevCoinEntry locked nanos: %v\n", prevCoinEntry.DeSoLockedNanos)
+				fmt.Printf("Profile entry locked nanos: %v\n", stateChangeMetadata.ProfileDeSoLockedNanos)
+			}
+			desoLockedNanosDiff = int64(stateChangeMetadata.ProfileDeSoLockedNanos - prevCoinEntry.DeSoLockedNanos)
 		}
 
 		// Set the amount of the buy/sell/add
