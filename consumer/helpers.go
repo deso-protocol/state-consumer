@@ -19,8 +19,8 @@ import (
 )
 
 // CopyStruct takes 2 structs and copies values from fields of the same name from the source struct to the destination struct.
-// This helper can be used by the data handler to easily copy values between the deso encoder and whichever struct type
-// is needed to perform the db operations by the handler.
+// This helper can be used by the data methods to easily copy values between the deso encoder and whichever struct type
+// is needed to perform the db operations by the methods.
 // This function also handles decoding fields that need to be decoded in some way. These fields are marked with a
 // "decode_function" tag in the destination struct.
 // The "decode_src_field_name" tag is used to specify the name of the source struct field that contains the data to be decoded.
@@ -157,9 +157,13 @@ func UnixNanoToTime(unixNano uint64) time.Time {
 }
 
 // Convert public key bytes to base58check string.
-func PublicKeyBytesToBase58Check(publicKey []byte) string {
+//func PublicKeyBytesToBase58Check(publicKey []byte, params *lib.DeSoParams) string {
+//	// If running against testnet data, a different set of params should be used.
+//	return lib.PkToString(publicKey, params)
+//}
+func PublicKeyBytesToBase58Check(publicKey []byte, params *lib.DeSoParams) string {
 	// If running against testnet data, a different set of params should be used.
-	return lib.PkToString(publicKey, &lib.DeSoMainnetParams)
+	return lib.PkToString(publicKey, params)
 }
 
 // Convert public key bytes to base58check string.
@@ -340,14 +344,6 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		if prevCoinEntry == nil {
 			glog.Errorf("Update TxIndex: missing DESOLockedNanosDiff error: %v", txn.Hash().String())
 		} else {
-			if PublicKeyBytesToBase58Check(txn.PublicKey[:]) == "BC1YLiUro1G14Zqv5bmB62ZfF9fJEdcidbCDvW1r8iNDdp5qikuNDoe" {
-				fmt.Printf("\n\n****Txn pub key: %v\n", PublicKeyBytesToBase58Check(txn.PublicKey[:]))
-				fmt.Printf("\n\nTxn meta: %+v\n", txnMeta)
-				fmt.Printf("prevCoinEntry: %+v\n", prevCoinEntry)
-				fmt.Printf("Prof entry: %+v\n", stateChangeMetadata.ProfileDeSoLockedNanos)
-				fmt.Printf("prevCoinEntry locked nanos: %v\n", prevCoinEntry.DeSoLockedNanos)
-				fmt.Printf("Profile entry locked nanos: %v\n", stateChangeMetadata.ProfileDeSoLockedNanos)
-			}
 			desoLockedNanosDiff = int64(stateChangeMetadata.ProfileDeSoLockedNanos - prevCoinEntry.DeSoLockedNanos)
 		}
 
