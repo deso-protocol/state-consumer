@@ -29,9 +29,9 @@ type BatchIndexInfo struct {
 	Index uint64
 }
 
-// manageBatchedEntries calls the data methods to process a batch of entries, and calculates & logs the current batch progress.
+// manageBatchedEntries calls the data handler to process a batch of entries, and calculates & logs the current batch progress.
 func (consumer *StateSyncerConsumer) manageBatchedEntries(batchedEntries []*lib.StateChangeEntry, isBatchMempool bool, entryCount uint64, batchCount uint64) {
-	// Call the data methods to process the batch. We do this with retries, in case the data methods fails.
+	// Call the data handler to process the batch. We do this with retries, in case the data handler fails.
 	err := consumer.callHandlerWithRetries(batchedEntries, 0)
 	if err != nil {
 		glog.Fatalf("consumer.manageBatchedEntries: %v", err)
@@ -126,7 +126,7 @@ func insertBatchIndexInOrder(batchIndexes []*BatchIndexInfo, newIndexInfo *Batch
 	return batchIndexes
 }
 
-// callHandlerWithRetries calls the data methods to process a batch of entries. If the call fails, it will retry
+// callHandlerWithRetries calls the data handler to process a batch of entries. If the call fails, it will retry
 // with a smaller batch size until it succeeds or hits the max number of retries. These failures can happen due to
 // an overloaded database or a duplicate key error.
 func (consumer *StateSyncerConsumer) callHandlerWithRetries(batchedEntries []*lib.StateChangeEntry, retries int) error {
@@ -187,7 +187,7 @@ func (consumer *StateSyncerConsumer) callHandlerWithRetries(batchedEntries []*li
 }
 
 // QueueBatch takes a slice of state change entries and add them to the appropriate channel if we are hypersyncing.
-// If we are not hypersyncing, it calls the data methods directly.
+// If we are not hypersyncing, it calls the data handler directly.
 func (consumer *StateSyncerConsumer) QueueBatch(batchedEntries []*lib.StateChangeEntry, isBatchMempool bool) error {
 	if consumer.IsHypersyncing {
 		// Add bool to blocking channel so that we can block the next batch from being processed if the channel is at capacity.
@@ -204,7 +204,7 @@ func (consumer *StateSyncerConsumer) QueueBatch(batchedEntries []*lib.StateChang
 		//// Add the state change entry batch to the channel so that it can be processed by the listener.
 		//consumer.DBEntryChannel <- batchedEntries
 	} else {
-		// When not in hypersync, just call the data methods directly.
+		// When not in hypersync, just call the data handler directly.
 		// We don't processNewEntriesInFile transactions concurrently, as transactions may be dependent on each other.
 		if err := consumer.callHandlerWithRetries(batchedEntries, 0); err != nil {
 			return errors.Wrapf(err, "consumer.QueueBatch: Error calling batch with retries")
@@ -224,7 +224,7 @@ func (consumer *StateSyncerConsumer) QueueBatch(batchedEntries []*lib.StateChang
 }
 
 // handleStateChangeEntry handles a batch of state change entries. It will batch entries of the same type and
-// encoder type together, and will call the data methods when the batch is full or when the encoder type or db
+// encoder type together, and will call the data handler when the batch is full or when the encoder type or db
 // operation changes.
 func (consumer *StateSyncerConsumer) handleStateChangeEntry(stateChangeEntry *lib.StateChangeEntry, isMempool bool) error {
 	batchSize := consumer.BytesInBatch + uint64(len(stateChangeEntry.EncoderBytes))
@@ -298,7 +298,7 @@ func UniqueEntries(entries []*lib.StateChangeEntry) []*lib.StateChangeEntry {
 }
 
 // KeysToDelete takes a slice of state change entries and returns a slice of key bytes. This helper can be used by
-// the data methods to construct a slice of IDs to delete given a slice of StateChangeEntries.
+// the data handler to construct a slice of IDs to delete given a slice of StateChangeEntries.
 func KeysToDelete(entries []*lib.StateChangeEntry) [][]byte {
 	keysToDelete := make([][]byte, len(entries))
 	for i, entry := range entries {

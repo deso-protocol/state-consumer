@@ -19,8 +19,8 @@ import (
 )
 
 // CopyStruct takes 2 structs and copies values from fields of the same name from the source struct to the destination struct.
-// This helper can be used by the data methods to easily copy values between the deso encoder and whichever struct type
-// is needed to perform the db operations by the methods.
+// This helper can be used by the data handler to easily copy values between the deso encoder and whichever struct type
+// is needed to perform the db operations by the handler.
 // This function also handles decoding fields that need to be decoded in some way. These fields are marked with a
 // "decode_function" tag in the destination struct.
 // The "decode_src_field_name" tag is used to specify the name of the source struct field that contains the data to be decoded.

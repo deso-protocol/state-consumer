@@ -43,7 +43,7 @@ type StateSyncerConsumer struct {
 	ConsumerProgressFile *os.File
 	ConsumerProgressDir  string
 
-	// The data methods that will be used to process the state changes that the consumer parses.
+	// The data handler that will be used to process the state changes that the consumer parses.
 	DataHandler StateSyncerDataHandler
 
 	// An object that contains the state changes that have been parsed but not yet processed. Used for batching.
@@ -98,7 +98,7 @@ func (consumer *StateSyncerConsumer) InitializeAndRun(
 // Open the state change file and the index file, and determine the byte index that the state syncer should start
 // parsing at.
 func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerProgressDir string, batchBytes uint64, threadLimit int, handler StateSyncerDataHandler) error {
-	// Set up the data methods initial values.
+	// Set up the data handler initial values.
 	consumer.IsHypersyncing = false
 	consumer.BatchCount = 0
 	consumer.EntryCount = 0
@@ -164,6 +164,10 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 		return errors.Wrapf(err, "consumer.intialize: Error retrieving file index for db operation")
 	}
 
+	// Set the batch count to the current batch on resume.
+	currentBatch := stateChangeFileByteIndex / batchBytes
+	consumer.BatchCount = currentBatch
+
 	// Seek to the byte index that we should start parsing at.
 	if _, err = consumer.StateChangeFile.Seek(int64(stateChangeFileByteIndex), 0); err != nil {
 		return errors.Wrapf(err, "consumer.initialize: Error seeking to byte index")
@@ -186,7 +190,7 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 	return nil
 }
 
-// processNewEntriesInFile reads the state change file and passes each entry to the data methods.
+// processNewEntriesInFile reads the state change file and passes each entry to the data handler.
 func (consumer *StateSyncerConsumer) processNewEntriesInFile(isMempool bool) error {
 	fileEOF := false
 	// Read from the state change file until we reach the end.
@@ -422,7 +426,7 @@ func (consumer *StateSyncerConsumer) retrieveNextEntry(isMempool bool) (*lib.Sta
 	return stateChangeEntry, false, nil
 }
 
-// detectAndHandleSyncEvent determines if the state change entry represents a sync event and emits it to the data methods.
+// detectAndHandleSyncEvent determines if the state change entry represents a sync event and emits it to the data handler.
 func (consumer *StateSyncerConsumer) detectAndHandleSyncEvent(stateChangeEntry *lib.StateChangeEntry) error {
 	// Determine if hypersync is beginning or ending.
 	if stateChangeEntry.OperationType == lib.DbOperationTypeInsert && !consumer.IsHypersyncing {
@@ -560,7 +564,7 @@ func (consumer *StateSyncerConsumer) peekNextStateChangeEntry(reader *bufio.Read
 }
 
 // checkBlockSyncStart checks if the next entry in the state change file is a blocksync event. If it is, emit a
-// SyncEventBlocksyncStart event to the data methods.
+// SyncEventBlocksyncStart event to the data handler.
 func (consumer *StateSyncerConsumer) checkBlockSyncStart() error {
 	// Peek at the next state change entry
 	nextStateChangeEntry, err := consumer.peekNextStateChangeEntry(consumer.StateChangeFileReader, consumer.StateChangeFile)
