@@ -289,6 +289,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 
 		// General transaction metadata
 		BasicTransferTxindexMetadata: &lib.BasicTransferTxindexMetadata{
+			// TODO: compute fees for pre-balance model txns.
 			FeeNanos: fees,
 			// TODO: This doesn't add much value, and it makes output hard to read because
 			// it's so long so I'm commenting it out for now.
@@ -300,6 +301,10 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		},
 
 		TxnOutputs: txn.TxOutputs,
+	}
+
+	if getUtxoOpByOperationType(utxoOps, lib.OperationTypeFailingTxn) != nil {
+		return txnMeta, nil
 	}
 
 	if blockHashHex != "" {
