@@ -261,6 +261,7 @@ func (consumer *StateSyncerConsumer) SyncCommittedEntry(stateChangeEntry *lib.St
 }
 
 func (consumer *StateSyncerConsumer) SyncMempoolEntry(stateChangeEntry *lib.StateChangeEntry) error {
+	startTime := time.Now()
 	// If the entry is from a new flush (i.e. a new block), revert the current mempool entries before applying.
 	if stateChangeEntry.FlushId != consumer.CurrentMempoolEntryFlushId {
 		if err := consumer.RevertMempoolEntries(); err != nil {
@@ -279,6 +280,7 @@ func (consumer *StateSyncerConsumer) SyncMempoolEntry(stateChangeEntry *lib.Stat
 
 	// Add this entry to the file log of applied mempool entries.
 	consumer.saveMempoolProgressToFile(stateChangeEntry)
+	fmt.Printf("Time to apply mempool entry: %v\n", time.Since(startTime))
 	return nil
 }
 
@@ -311,6 +313,7 @@ func (consumer *StateSyncerConsumer) RevertMempoolEntry(stateChangeEntry *lib.St
 }
 
 func (consumer *StateSyncerConsumer) RevertMempoolEntries() error {
+	fmt.Printf("Reverting mempool entries\n")
 	// Execute any remaining batched transactions before executing the revert.
 	if err := consumer.executeBatch(); err != nil {
 		return errors.Wrapf(err, "consumer.revertMempoolEntries: Error executing batch")
@@ -340,7 +343,7 @@ func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader
 	entryByteSize, err := lib.ReadUvarint(reader)
 	if err != nil && (err == io.ErrUnexpectedEOF || err == io.EOF) {
 		// If it's an unexpected EOF, log it and return true to signify EOF.
-		glog.Errorf("consumer.readAndDecodeNextEntry: Error reading from state change file: %v", err)
+		//glog.Errorf("consumer.readAndDecodeNextEntry: Error reading from state change file: %v", err)
 		// Reset the reader to the position before the unexpected EOF.
 		if _, err = file.Seek(currentPos, io.SeekStart); err != nil {
 			return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error seeking to current position in file")
@@ -416,6 +419,7 @@ func (consumer *StateSyncerConsumer) retrieveNextEntry(isMempool bool) (*lib.Sta
 		}
 		// If the flush ID has changed, revert the current mempool entries and reset the mempool reader.
 		if mempoolFirstEntry.FlushId != consumer.CurrentMempoolEntryFlushId {
+			fmt.Printf("Reverting mempool entries\n")
 			if err = consumer.RevertMempoolEntries(); err != nil {
 				return nil, false, errors.Wrapf(err, "consumer.retrieveNextEntry: Error reverting mempool entries")
 			}
@@ -480,15 +484,19 @@ func (consumer *StateSyncerConsumer) detectAndHandleSyncEvent(stateChangeEntry *
 // written, they will be captured by the processNewEntriesInFile, otherwise the processNewEntriesInFile will exit.
 func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() error {
 	for {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(1 * time.Millisecond)
+		startTime := time.Now()
 		// Process any new committed entries.
 		if err := consumer.processNewEntriesInFile(false); err != nil {
 			return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning committed entries")
 		}
+		fmt.Printf("\nTime to process committed entries: %v\n", time.Since(startTime))
+		startTime = time.Now()
 		// Process any new mempool entries
 		if err := consumer.processNewEntriesInFile(true); err != nil {
 			return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning mempool entries")
 		}
+		fmt.Printf("Time to process mempool entries: %v\n\n", time.Since(startTime))
 	}
 }
 
