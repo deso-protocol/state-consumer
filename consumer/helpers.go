@@ -157,10 +157,6 @@ func UnixNanoToTime(unixNano uint64) time.Time {
 }
 
 // Convert public key bytes to base58check string.
-//func PublicKeyBytesToBase58Check(publicKey []byte, params *lib.DeSoParams) string {
-//	// If running against testnet data, a different set of params should be used.
-//	return lib.PkToString(publicKey, params)
-//}
 func PublicKeyBytesToBase58Check(publicKey []byte, params *lib.DeSoParams) string {
 	// If running against testnet data, a different set of params should be used.
 	return lib.PkToString(publicKey, params)
@@ -293,6 +289,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 
 		// General transaction metadata
 		BasicTransferTxindexMetadata: &lib.BasicTransferTxindexMetadata{
+			// TODO: compute fees for pre-balance model txns.
 			FeeNanos: fees,
 			// TODO: This doesn't add much value, and it makes output hard to read because
 			// it's so long so I'm commenting it out for now.
@@ -304,6 +301,10 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		},
 
 		TxnOutputs: txn.TxOutputs,
+	}
+
+	if getUtxoOpByOperationType(utxoOps, lib.OperationTypeFailingTxn) != nil {
+		return txnMeta, nil
 	}
 
 	if blockHashHex != "" {
@@ -1173,4 +1174,31 @@ func getUtxoOpByOperationType(utxoOps []*lib.UtxoOperation, operationType lib.Op
 		}
 	}
 	return nil
+}
+
+func FilterEntriesByPrefix(entries []*lib.StateChangeEntry, prefix []byte) []*lib.StateChangeEntry {
+	filteredEntries := make([]*lib.StateChangeEntry, 0)
+	for _, entry := range entries {
+		if isPrefixMatch(entry.KeyBytes, prefix) {
+			filteredEntries = append(filteredEntries, entry)
+		}
+	}
+	return filteredEntries
+}
+
+func FilterKeysByPrefix(keys [][]byte, prefix []byte) [][]byte {
+	filteredKeys := make([][]byte, 0)
+	for _, key := range keys {
+		if isPrefixMatch(key, prefix) {
+			filteredKeys = append(filteredKeys, key)
+		}
+	}
+	return filteredKeys
+}
+
+func isPrefixMatch(key []byte, prefix []byte) bool {
+	if len(key) < len(prefix) {
+		return false
+	}
+	return bytes.Equal(key[:len(prefix)], prefix)
 }

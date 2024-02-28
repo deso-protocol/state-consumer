@@ -338,9 +338,9 @@ func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader
 	}
 	// Get the size of the next state change entry.
 	entryByteSize, err := lib.ReadUvarint(reader)
-	if err != nil && (err == io.ErrUnexpectedEOF || err == io.EOF) {
+	if err != nil && (errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)) {
 		// If it's an unexpected EOF, log it and return true to signify EOF.
-		glog.Errorf("consumer.readAndDecodeNextEntry: Error reading from state change file: %v", err)
+		glog.V(2).Infof("consumer.readAndDecodeNextEntry: Error reading from state change file: %v", err)
 		// Reset the reader to the position before the unexpected EOF.
 		if _, err = file.Seek(currentPos, io.SeekStart); err != nil {
 			return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error seeking to current position in file")
@@ -356,9 +356,9 @@ func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader
 	// If there are no bytes to read, return true to signify EOF.
 	if bytesRead == 0 {
 		return nil, true, nil
-	} else if err != nil && (err == io.ErrUnexpectedEOF || err == io.EOF) {
+	} else if err != nil && (errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)) {
 		// If it's an unexpected EOF, log it and return true to signify EOF.
-		glog.Errorf("consumer.readAndDecodeNextEntry: Error reading from state change file: %v", err)
+		glog.V(2).Infof("consumer.readAndDecodeNextEntry: Error reading from state change file: %v", err)
 		// Reset the reader to the position before the unexpected EOF.
 		if _, err = file.Seek(currentPos, io.SeekStart); err != nil {
 			return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error seeking to current position in file")
