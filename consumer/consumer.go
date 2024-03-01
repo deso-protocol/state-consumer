@@ -480,7 +480,8 @@ func (consumer *StateSyncerConsumer) detectAndHandleSyncEvent(stateChangeEntry *
 // written, they will be captured by the processNewEntriesInFile, otherwise the processNewEntriesInFile will exit.
 func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() error {
 	for {
-		time.Sleep(50 * time.Millisecond)
+		// Short sleep to prevent busy-waiting.
+		time.Sleep(1 * time.Millisecond)
 		// Process any new committed entries.
 		if err := consumer.processNewEntriesInFile(false); err != nil {
 			return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning committed entries")
