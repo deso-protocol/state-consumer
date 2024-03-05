@@ -264,14 +264,29 @@ func (consumer *StateSyncerConsumer) SyncMempoolEntry(stateChangeEntry *lib.Stat
 	// If the entry is from a new flush (i.e. a new block), revert the current mempool entries before applying.
 	if stateChangeEntry.FlushId != consumer.CurrentMempoolEntryFlushId {
 		if err := consumer.RevertMempoolEntries(); err != nil {
-			return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error reverting mempool entries")
+			return errors.Wrapf(err, "consumer.SyncMempoolEntry: Error reverting mempool entries")
 		}
 		consumer.CurrentMempoolEntryFlushId = stateChangeEntry.FlushId
 	}
 
+	// If the mempool entry has an "IsReverted" flag, it represents an entry change that has since been booted from
+	// the mempool. In this instance, we need to execute the current batch being stored, and then revert this entry from
+	// our synced state.
+	if stateChangeEntry.IsReverted {
+		if err := consumer.executeBatch(); err != nil {
+			return errors.Wrapf(err, "consumer.SyncMempoolEntry: Error executing batch prior to entry reversion")
+		}
+		fmt.Printf("Reverting mempool entry %d: %+v", stateChangeEntry.EncoderType, stateChangeEntry.Encoder)
+		if err := consumer.RevertMempoolEntry(stateChangeEntry); err != nil {
+			return errors.Wrapf(err, "consumer.SyncMempoolEntry: Error reverting mempool entry")
+		}
+		// A mempool reversion doesn't need to be saved, so we can exit here.
+		return nil
+	}
+
 	// Handle the state change entry.
 	if err := consumer.handleStateChangeEntry(stateChangeEntry, true); err != nil {
-		return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error handling state change entry")
+		return errors.Wrapf(err, "consumer.SyncMempoolEntry: Error handling state change entry")
 	}
 
 	// Add this entry to the list of applied mempool entries.
@@ -318,7 +333,13 @@ func (consumer *StateSyncerConsumer) RevertMempoolEntries() error {
 
 	// Revert all applied mempool entries in reverse order.
 	for ii := len(consumer.AppliedMempoolEntries) - 1; ii >= 0; ii-- {
-		if err := consumer.RevertMempoolEntry(consumer.AppliedMempoolEntries[ii]); err != nil {
+		appliedEntry := consumer.AppliedMempoolEntries[ii]
+
+		// If the entry is already reverted, we don't need to re-revert it, it's a no-op
+		if appliedEntry.IsReverted {
+			continue
+		}
+		if err := consumer.RevertMempoolEntry(appliedEntry); err != nil {
 			return errors.Wrapf(err, "consumer.revertMempoolEntries: Error reverting mempool entry")
 		}
 	}
@@ -340,7 +361,7 @@ func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader
 	entryByteSize, err := lib.ReadUvarint(reader)
 	if err != nil && (err == io.ErrUnexpectedEOF || err == io.EOF) {
 		// If it's an unexpected EOF, log it and return true to signify EOF.
-		glog.Errorf("consumer.readAndDecodeNextEntry: Error reading from state change file: %v", err)
+		glog.V(2).Infof("consumer.readAndDecodeNextEntry: Error reading from state change file: %v", err)
 		// Reset the reader to the position before the unexpected EOF.
 		if _, err = file.Seek(currentPos, io.SeekStart); err != nil {
 			return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error seeking to current position in file")
@@ -358,7 +379,7 @@ func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader
 		return nil, true, nil
 	} else if err != nil && (err == io.ErrUnexpectedEOF || err == io.EOF) {
 		// If it's an unexpected EOF, log it and return true to signify EOF.
-		glog.Errorf("consumer.readAndDecodeNextEntry: Error reading from state change file: %v", err)
+		glog.V(2).Infof("consumer.readAndDecodeNextEntry: Error reading from state change file: %v", err)
 		// Reset the reader to the position before the unexpected EOF.
 		if _, err = file.Seek(currentPos, io.SeekStart); err != nil {
 			return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error seeking to current position in file")
