@@ -276,7 +276,7 @@ func (consumer *StateSyncerConsumer) SyncMempoolEntry(stateChangeEntry *lib.Stat
 		if err := consumer.executeBatch(); err != nil {
 			return errors.Wrapf(err, "consumer.SyncMempoolEntry: Error executing batch prior to entry reversion")
 		}
-		fmt.Printf("Reverting mempool entry %d: %+v", stateChangeEntry.EncoderType, stateChangeEntry.Encoder)
+		fmt.Printf("Reverting mempool entry %d\n", stateChangeEntry.EncoderType)
 		if err := consumer.RevertMempoolEntry(stateChangeEntry); err != nil {
 			return errors.Wrapf(err, "consumer.SyncMempoolEntry: Error reverting mempool entry")
 		}
