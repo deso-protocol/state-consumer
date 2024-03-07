@@ -192,6 +192,10 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 
 // processNewEntriesInFile reads the state change file and passes each entry to the data handler.
 func (consumer *StateSyncerConsumer) processNewEntriesInFile(isMempool bool) error {
+	if !consumer.IsHypersyncing {
+		consumer.DataHandler.InitiateTransaction()
+		defer consumer.DataHandler.CommitTransaction()
+	}
 	fileEOF := false
 	// Read from the state change file until we reach the end.
 	for !fileEOF {
