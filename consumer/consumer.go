@@ -339,9 +339,11 @@ func (consumer *StateSyncerConsumer) RevertMempoolEntries() error {
 	for ii := len(consumer.AppliedMempoolEntries) - 1; ii >= 0; ii-- {
 		appliedEntry := consumer.AppliedMempoolEntries[ii]
 
-		// If the entry is already reverted, we don't need to re-revert it, it's a no-op
+		// If the entry is already reverted, apply it back to its original state.
 		if appliedEntry.IsReverted {
-			continue
+			if err := consumer.DataHandler.HandleEntryBatch([]*lib.StateChangeEntry{appliedEntry}); err != nil {
+				return errors.Wrapf(err, "consumer.revertMempoolEntries: Error handling entry batch")
+			}
 		}
 		if err := consumer.RevertMempoolEntry(appliedEntry); err != nil {
 			return errors.Wrapf(err, "consumer.revertMempoolEntries: Error reverting mempool entry")
