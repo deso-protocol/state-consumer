@@ -565,7 +565,6 @@ func (consumer *StateSyncerConsumer) retrieveLastSyncedStateChangeEntryIndex() (
 // It does this by reading the last saved entry index from the entry index file and multiplying it by 4 to get the
 // byte index in the state change index file.
 func (consumer *StateSyncerConsumer) retrieveFileIndexForDbOperation(startEntryIndex uint64) (uint64, error) {
-	fmt.Printf("Last scanned index: %d\n", startEntryIndex)
 	consumer.EntryCount = startEntryIndex
 	consumer.LastScannedIndex = startEntryIndex
 	// Find the byte index in the state change file for the next db operation. Each entry byte index is represented
