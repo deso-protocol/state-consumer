@@ -190,16 +190,31 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 	return nil
 }
 
+func (consumer *StateSyncerConsumer) CommitTransaction() error {
+	err := consumer.DataHandler.CommitTransaction()
+	if err != nil {
+		return errors.Wrapf(err, "consumer.CommitTransaction: Error committing transaction")
+	}
+}
+
 // processNewEntriesInFile reads the state change file and passes each entry to the data handler.
-func (consumer *StateSyncerConsumer) processNewEntriesInFile(isMempool bool) error {
+func (consumer *StateSyncerConsumer) processNewEntriesInFile(isMempool bool) (err error) {
 	if !consumer.IsHypersyncing {
-		consumer.DataHandler.InitiateTransaction()
-		defer consumer.DataHandler.CommitTransaction()
+		err = consumer.DataHandler.InitiateTransaction()
+		if err != nil {
+			return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error initiating transaction")
+		}
+		defer func() {
+			// Call CommitTransaction and handle any potential error.
+			if commitErr := consumer.DataHandler.CommitTransaction(); commitErr != nil {
+				// If there's an error, wrap it with additional context and assign it to the named return variable.
+				err = fmt.Errorf("failed to commit transaction: %w", commitErr)
+			}
+		}()
 	}
 	fileEOF := false
 	// Read from the state change file until we reach the end.
 	for !fileEOF {
-		var err error
 		var stateChangeEntry *lib.StateChangeEntry
 		// Get the next state change entry from the state change file.
 		stateChangeEntry, fileEOF, err = consumer.retrieveNextEntry(isMempool)
