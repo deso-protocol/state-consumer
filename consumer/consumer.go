@@ -59,6 +59,10 @@ type StateSyncerConsumer struct {
 
 	// Track whether we're currently hypersyncing.
 	IsHypersyncing bool
+
+	// Whether to wrap each batch in a db transaction.
+	ExecuteTransactions bool
+
 	// Track whether we're currently syncing from the beginning.
 	SyncingFromBeginning bool
 
@@ -100,6 +104,7 @@ func (consumer *StateSyncerConsumer) InitializeAndRun(
 func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerProgressDir string, batchBytes uint64, threadLimit int, handler StateSyncerDataHandler) error {
 	// Set up the data handler initial values.
 	consumer.IsHypersyncing = false
+	consumer.ExecuteTransactions = false
 	consumer.BatchCount = 0
 	consumer.EntryCount = 0
 	consumer.MaxBatchBytes = batchBytes
@@ -192,7 +197,10 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 
 // processNewEntriesInFile reads the state change file and passes each entry to the data handler.
 func (consumer *StateSyncerConsumer) processNewEntriesInFile(isMempool bool) (err error) {
-	if !consumer.IsHypersyncing {
+	// If we are executing transactions, initiate a new transaction.
+	// This should occur after hypersync is complete.
+	if consumer.ExecuteTransactions {
+		fmt.Printf("INITIATING TRANSACTION\n")
 		err = consumer.DataHandler.InitiateTransaction()
 		if err != nil {
 			return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error initiating transaction")
@@ -487,6 +495,7 @@ func (consumer *StateSyncerConsumer) detectAndHandleSyncEvent(stateChangeEntry *
 		consumer.DBBlockingWG.Wait()
 		// Set the hypersyncing flag to false and close the channels.
 		consumer.IsHypersyncing = false
+		consumer.ExecuteTransactions = true
 		close(consumer.DBBlockingChannel)
 		if err := consumer.DataHandler.HandleSyncEvent(SyncEventHypersyncComplete); err != nil {
 			return errors.Wrapf(err, "consumer.detectAndHandleSyncEvent: Error handling hypersync complete event")
@@ -542,7 +551,11 @@ func (consumer *StateSyncerConsumer) waitForStateChangesFile(stateChangeFileName
 				// If the file is non-empty, break out of the loop and stop blocking the thread.
 				if stateChangeFileInfo.Size() > 0 {
 					break
+				} else {
+					fmt.Printf("State file size: %d\n", stateChangeFileInfo.Size())
 				}
+			} else {
+				fmt.Printf("ERROR STATTING FILE: %v\n", err)
 			}
 		}
 		fmt.Println("Waiting for state changes file to be created...")
