@@ -200,7 +200,6 @@ func (consumer *StateSyncerConsumer) processNewEntriesInFile(isMempool bool) (er
 	// If we are executing transactions, initiate a new transaction.
 	// This should occur after hypersync is complete.
 	if consumer.ExecuteTransactions {
-		fmt.Printf("INITIATING TRANSACTION\n")
 		err = consumer.DataHandler.InitiateTransaction()
 		if err != nil {
 			return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error initiating transaction")
@@ -551,11 +550,7 @@ func (consumer *StateSyncerConsumer) waitForStateChangesFile(stateChangeFileName
 				// If the file is non-empty, break out of the loop and stop blocking the thread.
 				if stateChangeFileInfo.Size() > 0 {
 					break
-				} else {
-					fmt.Printf("State file size: %d\n", stateChangeFileInfo.Size())
 				}
-			} else {
-				fmt.Printf("ERROR STATTING FILE: %v\n", err)
 			}
 		}
 		fmt.Println("Waiting for state changes file to be created...")
