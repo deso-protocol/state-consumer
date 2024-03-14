@@ -280,6 +280,11 @@ func (consumer *StateSyncerConsumer) SyncCommittedEntry(stateChangeEntry *lib.St
 }
 
 func (consumer *StateSyncerConsumer) SyncMempoolEntry(stateChangeEntry *lib.StateChangeEntry) error {
+	// If the entry doesn't match the current committed flush ID, don't apply it.
+	if stateChangeEntry.FlushId != consumer.CurrentConfirmedEntryFlushId {
+		return nil
+	}
+
 	// If the entry is from a new flush (i.e. a new block), revert the current mempool entries before applying.
 	if stateChangeEntry.FlushId != consumer.CurrentMempoolEntryFlushId {
 		if err := consumer.RevertMempoolEntries(); err != nil {
