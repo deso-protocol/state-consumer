@@ -282,6 +282,7 @@ func (consumer *StateSyncerConsumer) SyncCommittedEntry(stateChangeEntry *lib.St
 func (consumer *StateSyncerConsumer) SyncMempoolEntry(stateChangeEntry *lib.StateChangeEntry) error {
 	// If the entry matches the current committed flush ID, don't apply it.
 	if stateChangeEntry.FlushId == consumer.CurrentConfirmedEntryFlushId {
+		fmt.Printf("Skipping mempool entry due to flush ID match: %+v\n", stateChangeEntry)
 		return nil
 	}
 
