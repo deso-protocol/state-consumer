@@ -256,9 +256,23 @@ func (consumer *StateSyncerConsumer) processNewEntriesInFile(isMempool bool) (er
 }
 
 func (consumer *StateSyncerConsumer) SyncCommittedEntry(stateChangeEntry *lib.StateChangeEntry) error {
+	var post *lib.PostEntry
+	if stateChangeEntry.EncoderType == lib.EncoderTypePostEntry {
+		post = stateChangeEntry.Encoder.(*lib.PostEntry)
+		if PublicKeyBytesToBase58Check(post.PosterPublicKey, &lib.DeSoMainnetParams) == "BC1YLiUs9hvLpLL679JMtvaueoBKPbqmrckGdv1GKK823fHrBM12YBR" {
+			fmt.Printf("Syncing committed entry: %+v\n", stateChangeEntry)
+			postBody, _ := DecodeDesoBodySchema(post.Body)
+			fmt.Printf("Post body: %+v\n", postBody)
+		}
+	}
+
 	// If the entry is from a new flush (i.e. a new block), revert the current mempool entries before applying.
 	if stateChangeEntry.FlushId != consumer.CurrentConfirmedEntryFlushId {
+		if post != nil {
+			fmt.Printf("Reverting mempool entries for committed entry due to new flush: %+v\n", stateChangeEntry)
+		}
 		if err := consumer.RevertMempoolEntries(); err != nil {
+			fmt.Printf("Error reverting mempool entries: %v\n", err)
 			return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error reverting mempool entries")
 		}
 		// Update the current block sync flush ID.
@@ -270,6 +284,7 @@ func (consumer *StateSyncerConsumer) SyncCommittedEntry(stateChangeEntry *lib.St
 	}
 	// Detect if this entry represets a sync state change and emit
 	if err := consumer.detectAndHandleSyncEvent(stateChangeEntry); err != nil {
+		fmt.Printf("error detecting sync event: %v\n", err)
 		return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error detecting sync event")
 	}
 	// Handle the state change entry.
@@ -280,6 +295,16 @@ func (consumer *StateSyncerConsumer) SyncCommittedEntry(stateChangeEntry *lib.St
 }
 
 func (consumer *StateSyncerConsumer) SyncMempoolEntry(stateChangeEntry *lib.StateChangeEntry) error {
+	var post *lib.PostEntry
+	if stateChangeEntry.EncoderType == lib.EncoderTypePostEntry {
+		post = stateChangeEntry.Encoder.(*lib.PostEntry)
+		if PublicKeyBytesToBase58Check(post.PosterPublicKey, &lib.DeSoMainnetParams) == "BC1YLiUs9hvLpLL679JMtvaueoBKPbqmrckGdv1GKK823fHrBM12YBR" {
+			fmt.Printf("Syncing mempool entry: %+v\n", stateChangeEntry)
+			postBody, _ := DecodeDesoBodySchema(post.Body)
+			fmt.Printf("Post body: %+v\n", postBody)
+		}
+	}
+
 	// If the entry matches the current committed flush ID, don't apply it.
 	if stateChangeEntry.FlushId == consumer.CurrentConfirmedEntryFlushId {
 		fmt.Printf("Skipping mempool entry due to flush ID match: %+v\n", stateChangeEntry)
@@ -288,6 +313,9 @@ func (consumer *StateSyncerConsumer) SyncMempoolEntry(stateChangeEntry *lib.Stat
 
 	// If the entry is from a new flush (i.e. a new block), revert the current mempool entries before applying.
 	if stateChangeEntry.FlushId != consumer.CurrentMempoolEntryFlushId {
+		if post != nil {
+			fmt.Printf("Reverting mempool entries for mempool entry due to new flush: %+v\n", stateChangeEntry)
+		}
 		if err := consumer.RevertMempoolEntries(); err != nil {
 			return errors.Wrapf(err, "consumer.SyncMempoolEntry: Error reverting mempool entries")
 		}
