@@ -263,6 +263,8 @@ func (consumer *StateSyncerConsumer) SyncCommittedEntry(stateChangeEntry *lib.St
 			fmt.Printf("Syncing committed entry: %+v\n", stateChangeEntry)
 			postBody, _ := DecodeDesoBodySchema(post.Body)
 			fmt.Printf("Post body: %+v\n", postBody)
+		} else {
+			post = nil
 		}
 	}
 
@@ -302,6 +304,8 @@ func (consumer *StateSyncerConsumer) SyncMempoolEntry(stateChangeEntry *lib.Stat
 			fmt.Printf("Syncing mempool entry: %+v\n", stateChangeEntry)
 			postBody, _ := DecodeDesoBodySchema(post.Body)
 			fmt.Printf("Post body: %+v\n", postBody)
+		} else {
+			post = nil
 		}
 	}
 
@@ -353,6 +357,18 @@ func (consumer *StateSyncerConsumer) SyncMempoolEntry(stateChangeEntry *lib.Stat
 func (consumer *StateSyncerConsumer) RevertMempoolEntry(stateChangeEntry *lib.StateChangeEntry) error {
 	// Create a copy of the stateChangeEntry.
 	revertEntry := *stateChangeEntry
+
+	var post *lib.PostEntry
+	if stateChangeEntry.EncoderType == lib.EncoderTypePostEntry {
+		post = stateChangeEntry.Encoder.(*lib.PostEntry)
+		if PublicKeyBytesToBase58Check(post.PosterPublicKey, &lib.DeSoMainnetParams) == "BC1YLiUs9hvLpLL679JMtvaueoBKPbqmrckGdv1GKK823fHrBM12YBR" {
+			fmt.Printf("Reverting mempool entry: %+v\n", stateChangeEntry)
+			postBody, _ := DecodeDesoBodySchema(post.Body)
+			fmt.Printf("Post body: %+v\n", postBody)
+		} else {
+			post = nil
+		}
+	}
 
 	// If the ancestral record is nil, we need to delete the entry.
 	if revertEntry.AncestralRecord == nil {
