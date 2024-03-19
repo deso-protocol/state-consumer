@@ -221,6 +221,7 @@ func (consumer *StateSyncerConsumer) processNewEntriesInFile(isMempool bool) (er
 		if err != nil {
 			// If the error is from the mempool file, don't kill the process, just log the error.
 			if isMempool {
+				fileEOF = true
 				glog.Errorf("consumer.processNewEntriesInFile: Error reading next mempool entry from file: %s", err.Error())
 				break
 			}
@@ -400,6 +401,8 @@ func (consumer *StateSyncerConsumer) RevertMempoolEntries() error {
 		return errors.Wrapf(err, "consumer.revertMempoolEntries: Error executing batch")
 	}
 
+	fmt.Printf("Reverting mempool entries: %d\n", len(consumer.AppliedMempoolEntries))
+
 	// Revert all applied mempool entries in reverse order.
 	for ii := len(consumer.AppliedMempoolEntries) - 1; ii >= 0; ii-- {
 		appliedEntry := consumer.AppliedMempoolEntries[ii]
@@ -410,6 +413,7 @@ func (consumer *StateSyncerConsumer) RevertMempoolEntries() error {
 				return errors.Wrapf(err, "consumer.revertMempoolEntries: Error handling entry batch")
 			}
 		}
+
 		if err := consumer.RevertMempoolEntry(appliedEntry); err != nil {
 			return errors.Wrapf(err, "consumer.revertMempoolEntries: Error reverting mempool entry")
 		}
@@ -756,6 +760,7 @@ func (consumer *StateSyncerConsumer) revertStoredMempoolTransactions() error {
 		mempoolEntries = append(mempoolEntries, mempoolEntry)
 	}
 
+	fmt.Printf("Reverting %d mempool entries for stored txns\n", len(mempoolEntries))
 	// Revert the mempool entries in reverse order.
 	for i := len(mempoolEntries) - 1; i >= 0; i-- {
 		mempoolEntry := mempoolEntries[i]
