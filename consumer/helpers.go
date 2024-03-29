@@ -303,10 +303,6 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		TxnOutputs: txn.TxOutputs,
 	}
 
-	if getUtxoOpByOperationType(utxoOps, lib.OperationTypeFailingTxn) != nil {
-		return txnMeta, nil
-	}
-
 	if blockHashHex != "" {
 		txnMeta.BlockHashHex = blockHashHex
 	}
