@@ -228,7 +228,6 @@ func (consumer *StateSyncerConsumer) processNewEntriesInFile(isMempool bool) (er
 			return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error reading next entry from file")
 		}
 		if fileEOF {
-			fmt.Printf("End of file. Is mempool: %v\n", isMempool)
 			break
 		}
 		if !isMempool {
@@ -237,7 +236,6 @@ func (consumer *StateSyncerConsumer) processNewEntriesInFile(isMempool bool) (er
 			}
 		} else {
 			if err = consumer.SyncMempoolEntry(stateChangeEntry); err != nil {
-				fmt.Printf("Error in mempool: %v\n", err)
 				return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error syncing mempool entry")
 			}
 		}
@@ -585,11 +583,6 @@ func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() error {
 		if err := consumer.processNewEntriesInFile(false); err != nil {
 			return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning committed entries")
 		}
-		currentPos, err := consumer.StateChangeMempoolFile.Seek(0, io.SeekCurrent)
-		if err != nil {
-			fmt.Printf("Error getting current mempool pos: %v\n", err)
-		}
-		fmt.Printf("About to process new mempool entries, starting at index %v\n", currentPos)
 		// Process any new mempool entries
 		if err := consumer.processNewEntriesInFile(true); err != nil {
 			return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning mempool entries")
