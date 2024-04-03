@@ -372,13 +372,13 @@ func (consumer *StateSyncerConsumer) SyncMempoolEntry(stateChangeEntry *lib.Stat
 	consumer.MempoolEntryCount += 1
 	consumer.MempoolEntryCountByEntryType[stateChangeEntry.EncoderType] += 1
 	consumer.MempoolEntryCountByBadgerKey[string(stateChangeEntry.KeyBytes)] += 1
-	if consumer.MempoolEntryCount%1000 == 0 {
-		fmt.Printf("Mempool entry count: %d\n", consumer.MempoolEntryCount)
-		// Loop through the entry types in the count map, print out the count for each type.
-		for entryType, count := range consumer.MempoolEntryCountByEntryType {
-			fmt.Printf("Mempool entry count for type %d: %d\n", entryType, count)
-		}
-	}
+	//if consumer.MempoolEntryCount%1000 == 0 {
+	//	fmt.Printf("Mempool entry count: %d\n", consumer.MempoolEntryCount)
+	//	// Loop through the entry types in the count map, print out the count for each type.
+	//	for entryType, count := range consumer.MempoolEntryCountByEntryType {
+	//		fmt.Printf("Mempool entry count for type %d: %d\n", entryType, count)
+	//	}
+	//}
 	// Handle the state change entry.
 	if err := consumer.handleStateChangeEntry(stateChangeEntry, true); err != nil {
 		return errors.Wrapf(err, "consumer.SyncMempoolEntry: Error handling state change entry")
