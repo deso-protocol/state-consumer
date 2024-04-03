@@ -77,6 +77,11 @@ type StateSyncerConsumer struct {
 	// Indexes to track asynchronous batch handling progress during hypersync.
 	BatchIndexes []*BatchIndexInfo
 
+	MempoolEntryCount int
+
+	MempoolEntryCountByEntryType map[lib.EncoderType]int
+	MempoolEntryCountByBadgerKey map[string]int
+
 	SupportsTransactions     bool
 	ActiveMempoolTransaction bool
 }
@@ -364,6 +369,16 @@ func (consumer *StateSyncerConsumer) SyncMempoolEntry(stateChangeEntry *lib.Stat
 		return nil
 	}
 
+	consumer.MempoolEntryCount += 1
+	consumer.MempoolEntryCountByEntryType[stateChangeEntry.EncoderType] += 1
+	consumer.MempoolEntryCountByBadgerKey[string(stateChangeEntry.KeyBytes)] += 1
+	if consumer.MempoolEntryCount%1000 == 0 {
+		fmt.Printf("Mempool entry count: %d\n", consumer.MempoolEntryCount)
+		// Loop through the entry types in the count map, print out the count for each type.
+		for entryType, count := range consumer.MempoolEntryCountByEntryType {
+			fmt.Printf("Mempool entry count for type %d: %d\n", entryType, count)
+		}
+	}
 	// Handle the state change entry.
 	if err := consumer.handleStateChangeEntry(stateChangeEntry, true); err != nil {
 		return errors.Wrapf(err, "consumer.SyncMempoolEntry: Error handling state change entry")
@@ -429,6 +444,9 @@ func (consumer *StateSyncerConsumer) RevertMempoolEntries() error {
 			}
 		}
 		consumer.ActiveMempoolTransaction = false
+		consumer.MempoolEntryCount = 0
+		consumer.MempoolEntryCountByBadgerKey = make(map[string]int)
+		consumer.MempoolEntryCountByEntryType = make(map[lib.EncoderType]int)
 		return nil
 	}
 
@@ -635,6 +653,18 @@ func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() error {
 		if err := consumer.processNewEntriesInFile(true); err != nil {
 			return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning mempool entries")
 		}
+		fmt.Printf("Finished processing mempool entries\n")
+		fmt.Printf("Current mempool entry count: %d\n", consumer.MempoolEntryCount)
+		// Loop through the entry types in the count map, print out the count for each type.
+		for entryType, count := range consumer.MempoolEntryCountByEntryType {
+			fmt.Printf("Mempool entry count for type %d: %d\n", entryType, count)
+		}
+		for key, count := range consumer.MempoolEntryCountByBadgerKey {
+			if count > 10 {
+				keyBytes := []byte(key)
+				fmt.Printf("Mempool entry count for key %+v: %d\n", keyBytes, count)
+			}
+		}
 	}
 }
 
@@ -787,6 +817,10 @@ func (consumer *StateSyncerConsumer) revertStoredMempoolTransactions() error {
 	// At the start of a sync, there should be no transactions. Kill any that are currently active.
 	if consumer.SupportsTransactions {
 		consumer.DataHandler.RollbackTransaction()
+		consumer.ActiveMempoolTransaction = false
+		consumer.MempoolEntryCount = 0
+		consumer.MempoolEntryCountByBadgerKey = make(map[string]int)
+		consumer.MempoolEntryCountByEntryType = make(map[lib.EncoderType]int)
 		return nil
 	}
 	mempoolStatusFilepath := filepath.Join(consumer.ConsumerProgressDir, lib.StateChangeMempoolFileName)
