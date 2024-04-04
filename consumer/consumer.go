@@ -76,9 +76,6 @@ type StateSyncerConsumer struct {
 
 	// Indexes to track asynchronous batch handling progress during hypersync.
 	BatchIndexes []*BatchIndexInfo
-
-	SupportsTransactions     bool
-	ActiveMempoolTransaction bool
 }
 
 func (consumer *StateSyncerConsumer) InitializeAndRun(
@@ -117,7 +114,6 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 	consumer.AppliedMempoolEntries = make([]*lib.StateChangeEntry, 0)
 	consumer.CurrentMempoolEntryFlushId = uuid.Nil
 	consumer.CurrentConfirmedEntryFlushId = uuid.Nil
-	consumer.SupportsTransactions = true
 
 	stateChangeFilePath := filepath.Join(stateChangeDir, lib.StateChangeFileName)
 	stateChangeIndexFilePath := filepath.Join(stateChangeDir, lib.StateChangeIndexFileName)
@@ -203,19 +199,19 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 func (consumer *StateSyncerConsumer) processNewEntriesInFile(isMempool bool) (err error) {
 	// If we are executing transactions, initiate a new transaction.
 	// This should occur after hypersync is complete.
-	//if consumer.ExecuteTransactions {
-	//	err = consumer.DataHandler.InitiateTransaction()
-	//	if err != nil {
-	//		return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error initiating transaction")
-	//	}
-	//	defer func() {
-	//		// Call CommitTransaction and handle any potential error.
-	//		if commitErr := consumer.DataHandler.CommitTransaction(); commitErr != nil {
-	//			// If there's an error, wrap it with additional context and assign it to the named return variable.
-	//			err = fmt.Errorf("consumer.processNewEntriesInFile: error committing transaction: %w", commitErr)
-	//		}
-	//	}()
-	//}
+	if consumer.ExecuteTransactions {
+		err = consumer.DataHandler.InitiateTransaction()
+		if err != nil {
+			return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error initiating transaction")
+		}
+		defer func() {
+			// Call CommitTransaction and handle any potential error.
+			if commitErr := consumer.DataHandler.CommitTransaction(); commitErr != nil {
+				// If there's an error, wrap it with additional context and assign it to the named return variable.
+				err = fmt.Errorf("consumer.processNewEntriesInFile: error committing transaction: %w", commitErr)
+			}
+		}()
+	}
 	fileEOF := false
 	// Read from the state change file until we reach the end.
 	for !fileEOF {
@@ -250,15 +246,6 @@ func (consumer *StateSyncerConsumer) processNewEntriesInFile(isMempool bool) (er
 	// Once we've reached the file EOF, process any remaining batched entries and cleanup.
 	if err := consumer.cleanup(); err != nil {
 		return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error cleaning up")
-	}
-
-	// Once we've synced all entries in the latest batch, initialize a mempool transaction.
-	if !isMempool && consumer.ExecuteTransactions && !consumer.ActiveMempoolTransaction {
-		err = consumer.DataHandler.InitiateTransaction()
-		if err != nil {
-			return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error initiating new db transaction.")
-		}
-		consumer.ActiveMempoolTransaction = true
 	}
 
 	// If we are syncing from the beginning, emit a sync end event.
@@ -340,13 +327,6 @@ func (consumer *StateSyncerConsumer) SyncMempoolEntry(stateChangeEntry *lib.Stat
 			return errors.Wrapf(err, "consumer.SyncMempoolEntry: Error reverting mempool entries")
 		}
 		consumer.CurrentMempoolEntryFlushId = stateChangeEntry.FlushId
-		if consumer.SupportsTransactions && !consumer.ActiveMempoolTransaction {
-			err := consumer.DataHandler.InitiateTransaction()
-			if err != nil {
-				return errors.Wrapf(err, "consumer.SyncMempoolEntry: Error initializing mempool transaction")
-			}
-			consumer.ActiveMempoolTransaction = true
-		}
 	}
 
 	// If the mempool entry has an "IsReverted" flag, it represents an entry change that has since been booted from
@@ -369,10 +349,8 @@ func (consumer *StateSyncerConsumer) SyncMempoolEntry(stateChangeEntry *lib.Stat
 		return errors.Wrapf(err, "consumer.SyncMempoolEntry: Error handling state change entry")
 	}
 
-	if !consumer.SupportsTransactions {
-		// Add this entry to the list of applied mempool entries.
-		consumer.AppliedMempoolEntries = append(consumer.AppliedMempoolEntries, stateChangeEntry)
-	}
+	// Add this entry to the list of applied mempool entries.
+	consumer.AppliedMempoolEntries = append(consumer.AppliedMempoolEntries, stateChangeEntry)
 
 	// Add this entry to the file log of applied mempool entries.
 	consumer.saveMempoolProgressToFile(stateChangeEntry)
@@ -420,18 +398,6 @@ func (consumer *StateSyncerConsumer) RevertMempoolEntry(stateChangeEntry *lib.St
 }
 
 func (consumer *StateSyncerConsumer) RevertMempoolEntries() error {
-	// If we support transactions, and there's an active mempool transaction, revert that transaction.
-	if consumer.SupportsTransactions {
-		if consumer.ActiveMempoolTransaction {
-			err := consumer.DataHandler.RollbackTransaction()
-			if err != nil {
-				return errors.Wrapf(err, "consumer.RevertMempoolEntries: Error rolling back txn")
-			}
-		}
-		consumer.ActiveMempoolTransaction = false
-		return nil
-	}
-
 	// Execute any remaining batched transactions before executing the revert.
 	if err := consumer.executeBatch(); err != nil {
 		return errors.Wrapf(err, "consumer.revertMempoolEntries: Error executing batch")
@@ -558,13 +524,6 @@ func (consumer *StateSyncerConsumer) retrieveNextEntry(isMempool bool) (*lib.Sta
 			consumer.StateChangeMempoolFileReader = bufio.NewReader(consumer.StateChangeMempoolFile)
 			// Set the reader to the newly reset mempool file reader.
 			reader = consumer.StateChangeMempoolFileReader
-			if consumer.SupportsTransactions && !consumer.ActiveMempoolTransaction {
-				err = consumer.DataHandler.InitiateTransaction()
-				if err != nil {
-					return nil, false, errors.Wrapf(err, "consumer.retrieveNextEntry: Error initiating new transaction")
-				}
-				consumer.ActiveMempoolTransaction = true
-			}
 		}
 	}
 	stateChangeEntry, eof, err := consumer.readAndDecodeNextEntry(reader, file)
@@ -761,9 +720,6 @@ func (consumer *StateSyncerConsumer) saveConsumerProgressToFile(entryIndex uint6
 
 // saveMempoolProgressToFile appends the last applied mempool entry to the mempool progress file.
 func (consumer *StateSyncerConsumer) saveMempoolProgressToFile(mempoolStateChangeEntry *lib.StateChangeEntry) error {
-	if consumer.SupportsTransactions {
-		return nil
-	}
 	mempoolStatusFilepath := filepath.Join(consumer.ConsumerProgressDir, lib.StateChangeMempoolFileName)
 
 	// Create the file if it doesn't exist.
@@ -784,11 +740,6 @@ func (consumer *StateSyncerConsumer) saveMempoolProgressToFile(mempoolStateChang
 // revertStoredMempoolTransactions extracts all applied mempool entries from the mempool progress file and reverts them.
 // This is used when re-starting the state syncer, so that the database is able to revert back to the last known chain-state.
 func (consumer *StateSyncerConsumer) revertStoredMempoolTransactions() error {
-	// At the start of a sync, there should be no transactions. Kill any that are currently active.
-	if consumer.SupportsTransactions {
-		consumer.DataHandler.RollbackTransaction()
-		return nil
-	}
 	mempoolStatusFilepath := filepath.Join(consumer.ConsumerProgressDir, lib.StateChangeMempoolFileName)
 	// Create the file if it doesn't exist.
 	file, err := os.Open(mempoolStatusFilepath)
