@@ -691,6 +691,7 @@ func (consumer *StateSyncerConsumer) checkBlockSyncStart() error {
 		return nil
 	}
 	if nextStateChangeEntry.OperationType != lib.DbOperationTypeInsert {
+		consumer.ExecuteTransactions = true
 		if err = consumer.DataHandler.HandleSyncEvent(SyncEventBlocksyncStart); err != nil {
 			return errors.Wrapf(err, "consumer.detectAndHandleSyncEvent: Error handling blocksync start event")
 		}
