@@ -197,21 +197,6 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 
 // processNewEntriesInFile reads the state change file and passes each entry to the data handler.
 func (consumer *StateSyncerConsumer) processNewEntriesInFile(isMempool bool) (err error) {
-	// If we are executing transactions, initiate a new transaction.
-	// This should occur after hypersync is complete.
-	if consumer.ExecuteTransactions {
-		err = consumer.DataHandler.InitiateTransaction()
-		if err != nil {
-			return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error initiating transaction")
-		}
-		defer func() {
-			// Call CommitTransaction and handle any potential error.
-			if commitErr := consumer.DataHandler.CommitTransaction(); commitErr != nil {
-				// If there's an error, wrap it with additional context and assign it to the named return variable.
-				err = fmt.Errorf("consumer.processNewEntriesInFile: error committing transaction: %w", commitErr)
-			}
-		}()
-	}
 	fileEOF := false
 	// Read from the state change file until we reach the end.
 	for !fileEOF {
@@ -577,22 +562,44 @@ func (consumer *StateSyncerConsumer) detectAndHandleSyncEvent(stateChangeEntry *
 
 // watchFileAndScanOnWrite continually triggers a new processNewEntriesInFile of the consumer. If there are any new changes that have been
 // written, they will be captured by the processNewEntriesInFile, otherwise the processNewEntriesInFile will exit.
-func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() error {
+func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() (err error) {
 	for {
-		// Short sleep to prevent busy-waiting.
-		time.Sleep(1 * time.Millisecond)
-		// Process any new committed entries.
-		if err := consumer.processNewEntriesInFile(false); err != nil {
-			return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning committed entries")
-		}
-		currentPos, err := consumer.StateChangeMempoolFile.Seek(0, io.SeekCurrent)
+		err = func() error {
+			// Short sleep to prevent busy-waiting.
+			time.Sleep(1 * time.Millisecond)
+
+			// If we are executing transactions, initiate a new transaction.
+			// This should occur after hypersync is complete.
+			if consumer.ExecuteTransactions {
+				err = consumer.DataHandler.InitiateTransaction()
+				if err != nil {
+					return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error initiating transaction")
+				}
+				defer func() {
+					// Call CommitTransaction and handle any potential error.
+					if commitErr := consumer.DataHandler.CommitTransaction(); commitErr != nil {
+						// If there's an error, wrap it with additional context and assign it to the named return variable.
+						err = fmt.Errorf("consumer.processNewEntriesInFile: error committing transaction: %w", commitErr)
+					}
+				}()
+			}
+			// Process any new committed entries.
+			if err = consumer.processNewEntriesInFile(false); err != nil {
+				return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning committed entries")
+			}
+			currentPos, readErr := consumer.StateChangeMempoolFile.Seek(0, io.SeekCurrent)
+			if readErr != nil {
+				fmt.Printf("Error getting current mempool pos: %v\n", readErr)
+			}
+			fmt.Printf("About to process new mempool entries, starting at index %v\n", currentPos)
+			// Process any new mempool entries
+			if err = consumer.processNewEntriesInFile(true); err != nil {
+				return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning mempool entries")
+			}
+			return nil
+		}()
 		if err != nil {
-			fmt.Printf("Error getting current mempool pos: %v\n", err)
-		}
-		fmt.Printf("About to process new mempool entries, starting at index %v\n", currentPos)
-		// Process any new mempool entries
-		if err := consumer.processNewEntriesInFile(true); err != nil {
-			return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning mempool entries")
+			return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error processing new entries")
 		}
 	}
 }
