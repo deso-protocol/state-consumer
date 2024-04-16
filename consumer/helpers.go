@@ -1316,6 +1316,42 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 			PublicKeyBase58Check: validatorPublicKeyBase58Check,
 			Metadata:             "UnjailedValidatorPublicKeyBase58Check",
 		})
+	case lib.TxnTypeCoinLockup:
+		realTxMeta := txn.TxnMeta.(*lib.CoinLockupMetadata)
+		profilePublicKey := realTxMeta.ProfilePublicKey.ToBytes()
+		recipientPublicKey := realTxMeta.RecipientPublicKey.ToBytes()
+		txnMeta.AffectedPublicKeys = append(txnMeta.AffectedPublicKeys, &lib.AffectedPublicKey{
+			PublicKeyBase58Check: lib.PkToString(profilePublicKey, params),
+			Metadata:             "CoinLockupProfilePublicKeyBase58Check",
+		})
+		txnMeta.AffectedPublicKeys = append(txnMeta.AffectedPublicKeys, &lib.AffectedPublicKey{
+			PublicKeyBase58Check: lib.PkToString(recipientPublicKey, params),
+			Metadata:             "CoinLockupRecipientPublicKeyBase58Check",
+		})
+	case lib.TxnTypeUpdateCoinLockupParams:
+		txnMeta.AffectedPublicKeys = append(txnMeta.AffectedPublicKeys, &lib.AffectedPublicKey{
+			PublicKeyBase58Check: lib.PkToString(txn.PublicKey, params),
+			Metadata:             "UpdateCoinLockupParamsPublicKeyBase58Check",
+		})
+	case lib.TxnTypeCoinLockupTransfer:
+		realTxMeta := txn.TxnMeta.(*lib.CoinLockupTransferMetadata)
+		profilePublicKey := realTxMeta.ProfilePublicKey.ToBytes()
+		recipientPublicKey := realTxMeta.RecipientPublicKey.ToBytes()
+		txnMeta.AffectedPublicKeys = append(txnMeta.AffectedPublicKeys, &lib.AffectedPublicKey{
+			PublicKeyBase58Check: lib.PkToString(profilePublicKey, params),
+			Metadata:             "CoinLockupTransferProfilePublicKeyBase58Check",
+		})
+		txnMeta.AffectedPublicKeys = append(txnMeta.AffectedPublicKeys, &lib.AffectedPublicKey{
+			PublicKeyBase58Check: lib.PkToString(recipientPublicKey, params),
+			Metadata:             "CoinLockupTransferRecipientPublicKeyBase58Check",
+		})
+	case lib.TxnTypeCoinUnlock:
+		realTxMeta := txn.TxnMeta.(*lib.CoinUnlockMetadata)
+		profilePublicKey := realTxMeta.ProfilePublicKey.ToBytes()
+		txnMeta.AffectedPublicKeys = append(txnMeta.AffectedPublicKeys, &lib.AffectedPublicKey{
+			PublicKeyBase58Check: lib.PkToString(profilePublicKey, params),
+			Metadata:             "CoinUnlockProfilePublicKeyBase58Check",
+		})
 	case lib.TxnTypeAtomicTxnsWrapper:
 		realTxMeta := txn.TxnMeta.(*lib.AtomicTxnsWrapperMetadata)
 		txnMeta.AtomicTxnsWrapperTxindexMetadata = &lib.AtomicTxnsWrapperTxindexMetadata{}
