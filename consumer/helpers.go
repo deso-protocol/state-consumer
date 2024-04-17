@@ -1159,6 +1159,219 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 			PublicKeyBase58Check: lib.PkToString(realTxMeta.RecipientAccessGroupOwnerPublicKey.ToBytes(), params),
 			Metadata:             "NewMessageRecipientAccessGroupOwnerPublicKe",
 		})
+	case lib.TxnTypeRegisterAsValidator:
+		realTxMeta := txn.TxnMeta.(*lib.RegisterAsValidatorMetadata)
+
+		validatorPublicKeyBase58Check := lib.PkToString(txn.PublicKey, params)
+
+		// Cast domains from []byte to string.
+		var domains []string
+		for _, domain := range realTxMeta.Domains {
+			domains = append(domains, string(domain))
+		}
+
+		// Construct TxindexMetadata.
+		txnMeta.RegisterAsValidatorTxindexMetadata = &lib.RegisterAsValidatorTxindexMetadata{
+			ValidatorPublicKeyBase58Check: validatorPublicKeyBase58Check,
+			Domains:                       domains,
+			DisableDelegatedStake:         realTxMeta.DisableDelegatedStake,
+			VotingPublicKey:               realTxMeta.VotingPublicKey.ToString(),
+			VotingAuthorization:           realTxMeta.VotingAuthorization.ToString(),
+		}
+
+		// Construct AffectedPublicKeys.
+		txnMeta.AffectedPublicKeys = append(txnMeta.AffectedPublicKeys, &lib.AffectedPublicKey{
+			PublicKeyBase58Check: validatorPublicKeyBase58Check,
+			Metadata:             "RegisteredValidatorPublicKeyBase58Check",
+		})
+	case lib.TxnTypeUnregisterAsValidator:
+		validatorPublicKeyBase58Check := lib.PkToString(txn.PublicKey, params)
+
+		utxoOp := getUtxoOpByOperationType(utxoOps, lib.OperationTypeUnregisterAsValidator)
+
+		var unstakedStakers []*lib.UnstakedStakerTxindexMetadata
+		if utxoOp != nil {
+			for _, stakeEntry := range utxoOp.PrevStakeEntries {
+				stakerPublicKeyBytes := stakeEntry.StakerPKID.ToBytes() // TODO: need to add state change metadata for Staker PKID
+				stakerPublicKeyBase58Check := lib.PkToString(stakerPublicKeyBytes, params)
+				unstakedStakers = append(unstakedStakers, &lib.UnstakedStakerTxindexMetadata{
+					StakerPublicKeyBase58Check: stakerPublicKeyBase58Check,
+					UnstakeAmountNanos:         stakeEntry.StakeAmountNanos,
+				})
+			}
+		}
+
+		// Construct TxindexMetadata.
+		txnMeta.UnregisterAsValidatorTxindexMetadata = &lib.UnregisterAsValidatorTxindexMetadata{
+			ValidatorPublicKeyBase58Check: validatorPublicKeyBase58Check,
+			UnstakedStakers:               unstakedStakers,
+		}
+		txnMeta.AffectedPublicKeys = append(txnMeta.AffectedPublicKeys, &lib.AffectedPublicKey{
+			PublicKeyBase58Check: validatorPublicKeyBase58Check,
+			Metadata:             "UnregisteredValidatorPublicKeyBase58Check",
+		})
+		for _, unstakedStaker := range unstakedStakers {
+			txnMeta.AffectedPublicKeys = append(txnMeta.AffectedPublicKeys, &lib.AffectedPublicKey{
+				PublicKeyBase58Check: unstakedStaker.StakerPublicKeyBase58Check,
+				Metadata:             "UnstakedStakerPublicKeyBase58Check",
+			})
+		}
+	case lib.TxnTypeStake:
+		realTxMeta := txn.TxnMeta.(*lib.StakeMetadata)
+
+		stakerPublicKeyBase58Check := lib.PkToString(txn.PublicKey, params)
+
+		// Convert ValidatorPublicKey to ValidatorPublicKeyBase58Check.
+		validatorPublicKeyBase58Check := lib.PkToString(realTxMeta.ValidatorPublicKey.ToBytes(), params)
+
+		// Construct TxindexMetadata.
+		txnMeta.StakeTxindexMetadata = &lib.StakeTxindexMetadata{
+			StakerPublicKeyBase58Check:    stakerPublicKeyBase58Check,
+			ValidatorPublicKeyBase58Check: validatorPublicKeyBase58Check,
+			StakeAmountNanos:              realTxMeta.StakeAmountNanos,
+		}
+
+		// Construct AffectedPublicKeys.
+		txnMeta.AffectedPublicKeys = append(txnMeta.AffectedPublicKeys, []*lib.AffectedPublicKey{
+			{
+				PublicKeyBase58Check: stakerPublicKeyBase58Check,
+				Metadata:             "StakerPublicKeyBase58Check",
+			},
+			{
+				PublicKeyBase58Check: validatorPublicKeyBase58Check,
+				Metadata:             "ValidatorStakedToPublicKeyBase58Check",
+			},
+		}...)
+	case lib.TxnTypeUnstake:
+		realTxMeta := txn.TxnMeta.(*lib.UnstakeMetadata)
+		// Convert TransactorPublicKeyBytes to StakerPublicKeyBase58Check.
+		stakerPublicKeyBase58Check := lib.PkToString(txn.PublicKey, params)
+
+		// Convert ValidatorPublicKey to ValidatorPublicKeyBase58Check.
+		validatorPublicKeyBase58Check := lib.PkToString(realTxMeta.ValidatorPublicKey.ToBytes(), params)
+
+		// Construct TxindexMetadata.
+		txnMeta.UnstakeTxindexMetadata = &lib.UnstakeTxindexMetadata{
+			StakerPublicKeyBase58Check:    stakerPublicKeyBase58Check,
+			ValidatorPublicKeyBase58Check: validatorPublicKeyBase58Check,
+			UnstakeAmountNanos:            realTxMeta.UnstakeAmountNanos,
+		}
+
+		// Construct AffectedPublicKeys.
+		txnMeta.AffectedPublicKeys = append(txnMeta.AffectedPublicKeys, []*lib.AffectedPublicKey{
+			{
+				PublicKeyBase58Check: stakerPublicKeyBase58Check,
+				Metadata:             "UnstakerPublicKeyBase58Check",
+			},
+			{
+				PublicKeyBase58Check: validatorPublicKeyBase58Check,
+				Metadata:             "ValidatorUnstakedFromPublicKeyBase58Check",
+			},
+		}...)
+	case lib.TxnTypeUnlockStake:
+		realTxMeta := txn.TxnMeta.(*lib.UnlockStakeMetadata)
+
+		// Convert TransactorPublicKeyBytes to StakerPublicKeyBase58Check.
+		stakerPublicKeyBase58Check := lib.PkToString(txn.PublicKey, params)
+
+		// Convert ValidatorPublicKey to ValidatorPublicKeyBase58Check.
+		validatorPublicKeyBase58Check := lib.PkToString(realTxMeta.ValidatorPublicKey.ToBytes(), params)
+
+		// Calculate TotalUnlockedAmountNanos.
+		totalUnlockedAmountNanos := uint256.NewInt(0)
+		utxoOp := getUtxoOpByOperationType(utxoOps, lib.OperationTypeUnlockStake)
+		var err error
+		for _, prevLockedStakeEntry := range utxoOp.PrevLockedStakeEntries {
+			totalUnlockedAmountNanos, err = lib.SafeUint256().Add(
+				totalUnlockedAmountNanos, prevLockedStakeEntry.LockedAmountNanos,
+			)
+			if err != nil {
+				glog.Errorf("CreateUnlockStakeTxindexMetadata: error calculating TotalUnlockedAmountNanos: %v", err)
+				totalUnlockedAmountNanos = uint256.NewInt(0)
+				break
+			}
+		}
+
+		// Construct TxindexMetadata.
+		txnMeta.UnlockStakeTxindexMetadata = &lib.UnlockStakeTxindexMetadata{
+			StakerPublicKeyBase58Check:    stakerPublicKeyBase58Check,
+			ValidatorPublicKeyBase58Check: validatorPublicKeyBase58Check,
+			StartEpochNumber:              realTxMeta.StartEpochNumber,
+			EndEpochNumber:                realTxMeta.EndEpochNumber,
+			TotalUnlockedAmountNanos:      totalUnlockedAmountNanos,
+		}
+
+		// Construct AffectedPublicKeys.
+		txnMeta.AffectedPublicKeys = append(txnMeta.AffectedPublicKeys, &lib.AffectedPublicKey{
+			PublicKeyBase58Check: stakerPublicKeyBase58Check,
+			Metadata:             "UnlockedStakerPublicKeyBase58Check",
+		})
+	case lib.TxnTypeUnjailValidator:
+		// Cast ValidatorPublicKey to ValidatorPublicKeyBase58Check.
+		validatorPublicKeyBase58Check := lib.PkToString(txn.PublicKey, params)
+
+		txnMeta.UnjailValidatorTxindexMetadata = &lib.UnjailValidatorTxindexMetadata{}
+		// Construct AffectedPublicKeys.
+		txnMeta.AffectedPublicKeys = append(txnMeta.AffectedPublicKeys, &lib.AffectedPublicKey{
+			PublicKeyBase58Check: validatorPublicKeyBase58Check,
+			Metadata:             "UnjailedValidatorPublicKeyBase58Check",
+		})
+	case lib.TxnTypeAtomicTxnsWrapper:
+		realTxMeta := txn.TxnMeta.(*lib.AtomicTxnsWrapperMetadata)
+		txnMeta.AtomicTxnsWrapperTxindexMetadata = &lib.AtomicTxnsWrapperTxindexMetadata{}
+		txnMeta.AtomicTxnsWrapperTxindexMetadata.InnerTxnsTransactionMetadata = []*lib.TransactionMetadata{}
+		// Find the utxo op for the atomic txn wrapper
+		var atomicWrapperUtxoOp *lib.UtxoOperation
+		for _, utxoOp := range utxoOps {
+			if utxoOp.Type == lib.OperationTypeAtomicTxnsWrapper {
+				atomicWrapperUtxoOp = utxoOp
+			}
+		}
+		// This should never happen.
+		if atomicWrapperUtxoOp == nil {
+			return nil, errors.New("ComputeTransactionMetadata: Could not find utxo op for atomic txn wrapper")
+		}
+		innerUtxoOps := atomicWrapperUtxoOp.AtomicTxnsInnerUtxoOps
+		if len(innerUtxoOps) != len(realTxMeta.Txns) {
+			return nil, errors.New("ComputeTransactionMetadata: Number of inner utxo ops does not match number of inner txns")
+		}
+		for ii, innerTxn := range realTxMeta.Txns {
+			// Compute the transaction metadata for each inner transaction.
+			var innerTxnsTxnMetadata *lib.TransactionMetadata
+			innerTxnsTxnMetadata, err = ComputeTransactionMetadata(
+				innerTxn,
+				blockHashHex,
+				params,
+				innerTxn.TxnFeeNanos,
+				txnIndexInBlock,
+				innerUtxoOps[ii],
+			)
+			if err != nil {
+				return nil, errors.Wrapf(err, "ComputeTransactionMetadata: Error computing inner transaction metadata")
+			}
+			txnMeta.AtomicTxnsWrapperTxindexMetadata.InnerTxnsTransactionMetadata = append(
+				txnMeta.AtomicTxnsWrapperTxindexMetadata.InnerTxnsTransactionMetadata, innerTxnsTxnMetadata)
+
+			// Create a global list of all affected public keys from each inner transaction.
+			txnMeta.AffectedPublicKeys = append(txnMeta.AffectedPublicKeys, innerTxnsTxnMetadata.AffectedPublicKeys...)
+		}
+	}
+	// Check if the transactor is an affected public key. If not, add them.
+	// We skip this for atomic transactions as their transactor is the ZeroPublicKey.
+	if txnMeta.TransactorPublicKeyBase58Check != "" && txn.TxnMeta.GetTxnType() != lib.TxnTypeAtomicTxnsWrapper {
+		transactorPublicKeyFound := false
+		for _, affectedPublicKey := range txnMeta.AffectedPublicKeys {
+			if affectedPublicKey.PublicKeyBase58Check == txnMeta.TransactorPublicKeyBase58Check {
+				transactorPublicKeyFound = true
+				break
+			}
+		}
+		if !transactorPublicKeyFound {
+			txnMeta.AffectedPublicKeys = append(txnMeta.AffectedPublicKeys, &lib.AffectedPublicKey{
+				PublicKeyBase58Check: txnMeta.TransactorPublicKeyBase58Check,
+				Metadata:             "TransactorPublicKeyBase58Check",
+			})
+		}
 	}
 	return txnMeta, nil
 }
