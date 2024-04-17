@@ -1189,16 +1189,25 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 
 		utxoOp := getUtxoOpByOperationType(utxoOps, lib.OperationTypeUnregisterAsValidator)
 
+		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
+			return nil, fmt.Errorf("ComputeTransactionMetadata: missing dao coin utxo op error: %v", txn.Hash().String())
+
+		}
+		stateChangeMetadata, ok := utxoOp.StateChangeMetadata.(*lib.UnregisterAsValidatorStateChangeMetadata)
+		if !ok {
+			return nil, fmt.Errorf(
+				"ComputeTransactionMetadata: missing unregister as validator state change metadata error: %v",
+				txn.Hash().String())
+		}
 		var unstakedStakers []*lib.UnstakedStakerTxindexMetadata
-		if utxoOp != nil {
-			for _, stakeEntry := range utxoOp.PrevStakeEntries {
-				stakerPublicKeyBytes := stakeEntry.StakerPKID.ToBytes() // TODO: need to add state change metadata for Staker PKID
-				stakerPublicKeyBase58Check := lib.PkToString(stakerPublicKeyBytes, params)
-				unstakedStakers = append(unstakedStakers, &lib.UnstakedStakerTxindexMetadata{
-					StakerPublicKeyBase58Check: stakerPublicKeyBase58Check,
-					UnstakeAmountNanos:         stakeEntry.StakeAmountNanos,
-				})
-			}
+		for _, stakeEntry := range utxoOp.PrevStakeEntries {
+			// Look up the staker's public key from the state change metadata
+			stakerPublicKeyBase58Check := stateChangeMetadata.
+				StakerPKIDToPublicKeyBase58CheckMap[*stakeEntry.StakerPKID]
+			unstakedStakers = append(unstakedStakers, &lib.UnstakedStakerTxindexMetadata{
+				StakerPublicKeyBase58Check: stakerPublicKeyBase58Check,
+				UnstakeAmountNanos:         stakeEntry.StakeAmountNanos,
+			})
 		}
 
 		// Construct TxindexMetadata.
