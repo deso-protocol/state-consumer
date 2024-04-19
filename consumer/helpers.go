@@ -322,7 +322,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		// Get the txn metadata
 		realTxMeta := txn.TxnMeta.(*lib.CreatorCoinMetadataa)
 
-		utxoOp := getUtxoOpByOperationType(utxoOps, lib.OperationTypeCreatorCoin)
+		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeCreatorCoin)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
 			return nil, fmt.Errorf("ComputeTransactionMetadata: missing creator coin utxo op error: %v", txn.Hash().String())
 		}
@@ -369,7 +369,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		})
 	case lib.TxnTypeCreatorCoinTransfer:
 		realTxMeta := txn.TxnMeta.(*lib.CreatorCoinTransferMetadataa)
-		utxoOp := getUtxoOpByOperationType(utxoOps, lib.OperationTypeCreatorCoinTransfer)
+		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeCreatorCoinTransfer)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
 			return nil, fmt.Errorf("ComputeTransactionMetadata: missing cc transfer utxo op error: %v", txn.Hash().String())
 		}
@@ -422,7 +422,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		})
 	case lib.TxnTypeSubmitPost:
 		realTxMeta := txn.TxnMeta.(*lib.SubmitPostMetadata)
-		utxoOp := getUtxoOpByOperationType(utxoOps, lib.OperationTypeSubmitPost)
+		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeSubmitPost)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
 			return nil, fmt.Errorf("ComputeTransactionMetadata: missing submit post utxo op error: %v", txn.Hash().String())
 		}
@@ -504,7 +504,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 	case lib.TxnTypeLike:
 		realTxMeta := txn.TxnMeta.(*lib.LikeMetadata)
 
-		utxoOp := getUtxoOpByOperationType(utxoOps, lib.OperationTypeLike)
+		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeLike)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
 			return nil, fmt.Errorf("ComputeTransactionMetadata: missing like utxo op error: %v", txn.Hash().String())
 		}
@@ -564,7 +564,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 	case lib.TxnTypeSwapIdentity:
 		realTxMeta := txn.TxnMeta.(*lib.SwapIdentityMetadataa)
 
-		utxoOp := getUtxoOpByOperationType(utxoOps, lib.OperationTypeSwapIdentity)
+		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeSwapIdentity)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
 			return nil, fmt.Errorf("ComputeTransactionMetadata: missing swap identity utxo op error: %v", txn.Hash().String())
 		}
@@ -611,7 +611,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 
 		isBuyNow := false
 
-		utxoOp := getUtxoOpByOperationType(utxoOps, lib.OperationTypeNFTBid)
+		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeNFTBid)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
 			return nil, fmt.Errorf("ComputeTransactionMetadata: missing nft bid utxo op error: %v", txn.Hash().String())
 		}
@@ -694,7 +694,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 	case lib.TxnTypeAcceptNFTBid:
 		realTxMeta := txn.TxnMeta.(*lib.AcceptNFTBidMetadata)
 
-		utxoOp := getUtxoOpByOperationType(utxoOps, lib.OperationTypeAcceptNFTBid)
+		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeAcceptNFTBid)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
 			return nil, fmt.Errorf("ComputeTransactionMetadata: missing accept bid utxo op error: %v", txn.Hash().String())
 		}
@@ -756,7 +756,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 	case lib.TxnTypeCreateNFT:
 		realTxMeta := txn.TxnMeta.(*lib.CreateNFTMetadata)
 
-		utxoOp := getUtxoOpByOperationType(utxoOps, lib.OperationTypeCreateNFT)
+		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeCreateNFT)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
 			return nil, fmt.Errorf("ComputeTransactionMetadata: missing create nft utxo op error: %v", txn.Hash().String())
 		}
@@ -789,7 +789,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 	case lib.TxnTypeUpdateNFT:
 		realTxMeta := txn.TxnMeta.(*lib.UpdateNFTMetadata)
 
-		utxoOp := getUtxoOpByOperationType(utxoOps, lib.OperationTypeUpdateNFT)
+		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeUpdateNFT)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
 			return nil, fmt.Errorf("ComputeTransactionMetadata: missing update nft utxo op error: %v", txn.Hash().String())
 		}
@@ -852,7 +852,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		}
 	case lib.TxnTypeBasicTransfer:
 		// Add the public key of the receiver to the affected public keys.
-		utxoOp := getUtxoOpByOperationType(utxoOps, lib.OperationTypeAddBalance)
+		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeAddBalance)
 		if utxoOp != nil {
 			txnMeta.AffectedPublicKeys = append(txnMeta.AffectedPublicKeys, &lib.AffectedPublicKey{
 				PublicKeyBase58Check: lib.PkToString(utxoOp.BalancePublicKey, params),
@@ -873,7 +873,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 	case lib.TxnTypeDAOCoin:
 		realTxMeta := txn.TxnMeta.(*lib.DAOCoinMetadata)
 
-		utxoOp := getUtxoOpByOperationType(utxoOps, lib.OperationTypeDAOCoin)
+		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeDAOCoin)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
 			return nil, fmt.Errorf("ComputeTransactionMetadata: missing dao coin utxo op error: %v", txn.Hash().String())
 		}
@@ -916,7 +916,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 	case lib.TxnTypeDAOCoinTransfer:
 		realTxMeta := txn.TxnMeta.(*lib.DAOCoinTransferMetadata)
 
-		utxoOp := getUtxoOpByOperationType(utxoOps, lib.OperationTypeDAOCoinTransfer)
+		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeDAOCoinTransfer)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
 			return nil, fmt.Errorf("ComputeTransactionMetadata: missing dao coin transfer utxo op error: %v", txn.Hash().String())
 		}
@@ -938,7 +938,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 	case lib.TxnTypeDAOCoinLimitOrder:
 		realTxMeta := txn.TxnMeta.(*lib.DAOCoinLimitOrderMetadata)
 
-		utxoOp := getUtxoOpByOperationType(utxoOps, lib.OperationTypeDAOCoinLimitOrder)
+		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeDAOCoinLimitOrder)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
 			return nil, fmt.Errorf("ComputeTransactionMetadata: missing dao coin limit order utxo op error: %v", txn.Hash().String())
 		}
@@ -1018,7 +1018,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 
 	case lib.TxnTypeDeleteUserAssociation:
 		realTxMeta := txn.TxnMeta.(*lib.DeleteUserAssociationMetadata)
-		utxoOp := getUtxoOpByOperationType(utxoOps, lib.OperationTypeDeleteUserAssociation)
+		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeDeleteUserAssociation)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
 			return nil, fmt.Errorf("ComputeTransactionMetadata: missing delete user association utxo op error: %v", txn.Hash().String())
 		}
@@ -1051,7 +1051,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 
 	case lib.TxnTypeCreatePostAssociation:
 		realTxMeta := txn.TxnMeta.(*lib.CreatePostAssociationMetadata)
-		utxoOp := getUtxoOpByOperationType(utxoOps, lib.OperationTypeCreatePostAssociation)
+		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeCreatePostAssociation)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
 			return nil, fmt.Errorf("ComputeTransactionMetadata: missing create post association utxo op error: %v", txn.Hash().String())
 		}
@@ -1078,7 +1078,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 
 	case lib.TxnTypeDeletePostAssociation:
 		realTxMeta := txn.TxnMeta.(*lib.DeletePostAssociationMetadata)
-		utxoOp := getUtxoOpByOperationType(utxoOps, lib.OperationTypeDeletePostAssociation)
+		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeDeletePostAssociation)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
 			return nil, fmt.Errorf("ComputeTransactionMetadata: missing delete post association utxo op error: %v", txn.Hash().String())
 		}
@@ -1187,7 +1187,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 	case lib.TxnTypeUnregisterAsValidator:
 		validatorPublicKeyBase58Check := lib.PkToString(txn.PublicKey, params)
 
-		utxoOp := getUtxoOpByOperationType(utxoOps, lib.OperationTypeUnregisterAsValidator)
+		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeUnregisterAsValidator)
 
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
 			return nil, fmt.Errorf("ComputeTransactionMetadata: missing dao coin utxo op error: %v", txn.Hash().String())
@@ -1288,7 +1288,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 
 		// Calculate TotalUnlockedAmountNanos.
 		totalUnlockedAmountNanos := uint256.NewInt(0)
-		utxoOp := getUtxoOpByOperationType(utxoOps, lib.OperationTypeUnlockStake)
+		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeUnlockStake)
 		var err error
 		for _, prevLockedStakeEntry := range utxoOp.PrevLockedStakeEntries {
 			totalUnlockedAmountNanos, err = lib.SafeUint256().Add(
@@ -1403,7 +1403,9 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 	}
 	// Check if the transactor is an affected public key. If not, add them.
 	// We skip this for atomic transactions as their transactor is the ZeroPublicKey.
-	if txnMeta.TransactorPublicKeyBase58Check != "" && txn.TxnMeta.GetTxnType() != lib.TxnTypeAtomicTxnsWrapper {
+	if txnMeta.TransactorPublicKeyBase58Check != "" &&
+		!bytes.Equal(txn.PublicKey, lib.ZeroPublicKey.ToBytes()) &&
+		txn.TxnMeta.GetTxnType() != lib.TxnTypeAtomicTxnsWrapper {
 		transactorPublicKeyFound := false
 		for _, affectedPublicKey := range txnMeta.AffectedPublicKeys {
 			if affectedPublicKey.PublicKeyBase58Check == txnMeta.TransactorPublicKeyBase58Check {
@@ -1421,7 +1423,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 	return txnMeta, nil
 }
 
-func getUtxoOpByOperationType(utxoOps []*lib.UtxoOperation, operationType lib.OperationType) *lib.UtxoOperation {
+func GetUtxoOpByOperationType(utxoOps []*lib.UtxoOperation, operationType lib.OperationType) *lib.UtxoOperation {
 	for _, utxoOp := range utxoOps {
 		if utxoOp.Type == operationType {
 			return utxoOp
