@@ -227,6 +227,8 @@ func (consumer *StateSyncerConsumer) QueueBatch(batchedEntries []*lib.StateChang
 // encoder type together, and will call the data handler when the batch is full or when the encoder type or db
 // operation changes.
 func (consumer *StateSyncerConsumer) handleStateChangeEntry(stateChangeEntry *lib.StateChangeEntry, isMempool bool) error {
+	fmt.Printf("Here is the %v stateChangeEntry: %+v\n", isMempool, stateChangeEntry)
+
 	batchSize := consumer.BytesInBatch + uint64(len(stateChangeEntry.EncoderBytes))
 
 	// If the batched entries has been set, isn't empty, and matches the current encoder type and db operation,
