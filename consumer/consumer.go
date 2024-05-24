@@ -337,7 +337,7 @@ func (consumer *StateSyncerConsumer) RevertMempoolEntries() error {
 }
 
 // readAndDecodeNextEntry reads the next state change entry from the state change file and decodes it as a deso encoder.
-func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader, file *os.File, firstEntry bool, isMempool bool) (sce *lib.StateChangeEntry, eof bool, err error) {
+func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader, file *os.File) (sce *lib.StateChangeEntry, eof bool, err error) {
 	// Get the current position in the file
 	currentPos, err := file.Seek(0, io.SeekCurrent)
 	if err != nil {
@@ -442,7 +442,7 @@ func (consumer *StateSyncerConsumer) retrieveNextEntry(isMempool bool) (*lib.Sta
 		// Read the first mempool entry to see if the flush ID has changed.
 		firstEntryReader := bufio.NewReader(consumer.StateChangeMempoolFirstEntryFile)
 
-		mempoolFirstEntry, eof, err := consumer.readAndDecodeNextEntry(firstEntryReader, consumer.StateChangeMempoolFirstEntryFile, true, isMempool)
+		mempoolFirstEntry, eof, err := consumer.readAndDecodeNextEntry(firstEntryReader, consumer.StateChangeMempoolFirstEntryFile)
 		if eof {
 			return nil, true, nil
 		} else if err != nil {
@@ -463,7 +463,7 @@ func (consumer *StateSyncerConsumer) retrieveNextEntry(isMempool bool) (*lib.Sta
 			reader = consumer.StateChangeMempoolFileReader
 		}
 	}
-	stateChangeEntry, eof, err := consumer.readAndDecodeNextEntry(reader, file, false, isMempool)
+	stateChangeEntry, eof, err := consumer.readAndDecodeNextEntry(reader, file)
 	if eof {
 		return nil, true, nil
 	} else if err != nil {
@@ -596,7 +596,7 @@ func (consumer *StateSyncerConsumer) peekNextStateChangeEntry(reader *bufio.Read
 	currentPos, err := file.Seek(0, io.SeekCurrent)
 
 	// Read the next entry from the state change file.
-	stateChangeEntry, _, err := consumer.readAndDecodeNextEntry(reader, file, true, false)
+	stateChangeEntry, _, err := consumer.readAndDecodeNextEntry(reader, file)
 	if err != nil {
 		return nil, errors.Wrapf(err, "consumer.peekNextStateChangeEntry: Error reading next entry")
 	}
@@ -688,7 +688,7 @@ func (consumer *StateSyncerConsumer) revertStoredMempoolTransactions() error {
 
 	for !fileEof {
 		var mempoolEntry *lib.StateChangeEntry
-		mempoolEntry, fileEof, err = consumer.readAndDecodeNextEntry(reader, file, true, true)
+		mempoolEntry, fileEof, err = consumer.readAndDecodeNextEntry(reader, file)
 		if fileEof {
 			break
 		} else if err != nil {
