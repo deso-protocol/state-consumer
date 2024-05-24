@@ -435,11 +435,7 @@ func (consumer *StateSyncerConsumer) retrieveNextEntry(isMempool bool) (*lib.Sta
 
 	// If mempool, check first entry to see if the flush ID has changed.
 	if isMempool {
-		// Get the current position in the mempool file
-		//currentPos, err := consumer.StateChangeMempoolFile.Seek(0, io.SeekCurrent)
-		//if err != nil {
-		//	return nil, false, errors.Wrapf(err, "consumer.retrieveNextEntry: Error getting current position in mempool file")
-		//}
+		// Scan the first entry in the mempool file to see if the flush ID has changed.
 		if _, err := consumer.StateChangeMempoolFirstEntryFile.Seek(0, io.SeekStart); err != nil {
 			return nil, false, errors.Wrapf(err, "consumer.retrieveNextEntry: Error seeking to start of mempool file")
 		}
@@ -453,10 +449,6 @@ func (consumer *StateSyncerConsumer) retrieveNextEntry(isMempool bool) (*lib.Sta
 			return nil, false, errors.Wrapf(err, "consumer.retrieveNextEntry: Error reading and decoding first mempool entry")
 		}
 
-		// Reset the mempool reader to the current position.
-		//if _, err = consumer.StateChangeMempoolFile.Seek(currentPos, io.SeekStart); err != nil {
-		//	return nil, false, errors.Wrapf(err, "consumer.retrieveNextEntry: Error seeking to current position in mempool file")
-		//}
 		// If the flush ID has changed, revert the current mempool entries and reset the mempool reader.
 		if mempoolFirstEntry.FlushId != consumer.CurrentMempoolEntryFlushId {
 			if err = consumer.RevertMempoolEntries(); err != nil {
