@@ -420,7 +420,7 @@ func (consumer *StateSyncerConsumer) RevertMempoolEntries() error {
 }
 
 // readAndDecodeNextEntry reads the next state change entry from the state change file and decodes it as a deso encoder.
-func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader, file *os.File) (*lib.StateChangeEntry, bool, error) {
+func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader, file *os.File) (sce *lib.StateChangeEntry, eof bool, err error) {
 	// Get the current position in the file
 	currentPos, err := file.Seek(0, io.SeekCurrent)
 	if err != nil {
@@ -437,7 +437,18 @@ func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader
 		}
 		return nil, true, nil
 	} else if err != nil {
+		if _, err = file.Seek(currentPos, io.SeekStart); err != nil {
+			return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error seeking to current position in file")
+		}
 		return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error reading from state change file")
+	}
+
+	if err = CheckSliceSize(int(entryByteSize)); err != nil {
+		// Reset the reader.
+		if _, err = file.Seek(currentPos, io.SeekStart); err != nil {
+			return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error seeking to current position in file")
+		}
+		return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error checking slice size")
 	}
 
 	// Create a buffer to hold the entry.
@@ -445,6 +456,9 @@ func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader
 	bytesRead, err := io.ReadFull(reader, buffer)
 	// If there are no bytes to read, return true to signify EOF.
 	if bytesRead == 0 {
+		if _, err = file.Seek(currentPos, io.SeekStart); err != nil {
+			return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error seeking to current position in file")
+		}
 		return nil, true, nil
 	} else if err != nil && (err == io.ErrUnexpectedEOF || err == io.EOF) {
 		// If it's an unexpected EOF, log it and return true to signify EOF.
@@ -455,18 +469,40 @@ func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader
 		}
 		return nil, true, nil
 	} else if err != nil {
+		// Reset the reader to the position before the unexpected EOF.
+		if _, err = file.Seek(currentPos, io.SeekStart); err != nil {
+			return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error seeking to current position in file")
+		}
 		return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error reading from state change file")
 	} else if bytesRead < int(entryByteSize) {
+		// Reset the reader to the position before the unexpected EOF.
+		if _, err = file.Seek(currentPos, io.SeekStart); err != nil {
+			return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error seeking to current position in file")
+		}
 		return nil, false, fmt.Errorf("consumer.readAndDecodeNextEntry: Not enough bytes read from state change file. Expected %d, got %d", entryByteSize, bytesRead)
 	}
+
+	// Create defered function to handle any panics that occur during decoding.
+	defer func() {
+		if r := recover(); r != nil {
+			file.Seek(currentPos, io.SeekStart)
+			err = fmt.Errorf("consumer.readAndDecodeNextEntry: Panic decoding entry: %v", r)
+			eof = false
+			sce = nil
+		}
+
+	}()
 
 	// Decode the state change entry.
 	stateChangeEntry := &lib.StateChangeEntry{}
 	if err = DecodeEntry(stateChangeEntry, buffer); err != nil {
+		if _, err = file.Seek(currentPos, io.SeekStart); err != nil {
+			return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error seeking to current position in file")
+		}
 		return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error decoding entry")
 	}
 
-	return stateChangeEntry, false, nil
+	return stateChangeEntry, false, err
 }
 
 // retrieveNextEntry reads the next StateChangeEntry bytes from the state change file and decode them.
@@ -483,27 +519,20 @@ func (consumer *StateSyncerConsumer) retrieveNextEntry(isMempool bool) (*lib.Sta
 
 	// If mempool, check first entry to see if the flush ID has changed.
 	if isMempool {
-		// Get the current position in the mempool file
-		currentPos, err := consumer.StateChangeMempoolFile.Seek(0, io.SeekCurrent)
-		if err != nil {
-			return nil, false, errors.Wrapf(err, "consumer.retrieveNextEntry: Error getting current position in mempool file")
-		}
-		if _, err = consumer.StateChangeMempoolFile.Seek(0, io.SeekStart); err != nil {
+		// Scan the first entry in the mempool file to see if the flush ID has changed.
+		if _, err := consumer.StateChangeMempoolFirstEntryFile.Seek(0, io.SeekStart); err != nil {
 			return nil, false, errors.Wrapf(err, "consumer.retrieveNextEntry: Error seeking to start of mempool file")
 		}
 		// Read the first mempool entry to see if the flush ID has changed.
-		firstEntryReader := bufio.NewReader(consumer.StateChangeMempoolFile)
-		mempoolFirstEntry, eof, err := consumer.readAndDecodeNextEntry(firstEntryReader, consumer.StateChangeMempoolFile)
+		firstEntryReader := bufio.NewReader(consumer.StateChangeMempoolFirstEntryFile)
+
+		mempoolFirstEntry, eof, err := consumer.readAndDecodeNextEntry(firstEntryReader, consumer.StateChangeMempoolFirstEntryFile)
 		if eof {
 			return nil, true, nil
 		} else if err != nil {
 			return nil, false, errors.Wrapf(err, "consumer.retrieveNextEntry: Error reading and decoding first mempool entry")
 		}
 
-		// Reset the mempool reader to the current position.
-		if _, err = consumer.StateChangeMempoolFile.Seek(currentPos, io.SeekStart); err != nil {
-			return nil, false, errors.Wrapf(err, "consumer.retrieveNextEntry: Error seeking to current position in mempool file")
-		}
 		// If the flush ID has changed, revert the current mempool entries and reset the mempool reader.
 		if mempoolFirstEntry.FlushId != consumer.CurrentMempoolEntryFlushId {
 			if err = consumer.RevertMempoolEntries(); err != nil {

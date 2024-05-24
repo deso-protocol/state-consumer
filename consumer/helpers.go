@@ -157,10 +157,11 @@ func UnixNanoToTime(unixNano uint64) time.Time {
 }
 
 // Convert public key bytes to base58check string.
-//func PublicKeyBytesToBase58Check(publicKey []byte, params *lib.DeSoParams) string {
-//	// If running against testnet data, a different set of params should be used.
-//	return lib.PkToString(publicKey, params)
-//}
+//
+//	func PublicKeyBytesToBase58Check(publicKey []byte, params *lib.DeSoParams) string {
+//		// If running against testnet data, a different set of params should be used.
+//		return lib.PkToString(publicKey, params)
+//	}
 func PublicKeyBytesToBase58Check(publicKey []byte, params *lib.DeSoParams) string {
 	// If running against testnet data, a different set of params should be used.
 	return lib.PkToString(publicKey, params)
@@ -1171,6 +1172,19 @@ func getUtxoOpByOperationType(utxoOps []*lib.UtxoOperation, operationType lib.Op
 		if utxoOp.Type == operationType {
 			return utxoOp
 		}
+	}
+	return nil
+}
+
+// CheckSliceSize checks if the requested slice size is within safe limits.
+func CheckSliceSize(length int) error {
+	const maxInt = int(^uint(0) >> 1) // platform-dependent maximum int value
+
+	if length < 0 {
+		return errors.New("length or capacity cannot be negative")
+	}
+	if length > maxInt {
+		return errors.New("requested slice size exceeds maximum allowed size")
 	}
 	return nil
 }
