@@ -26,8 +26,9 @@ type StateSyncerConsumer struct {
 	StateChangeFile       *os.File
 	StateChangeFileReader *bufio.Reader
 
-	StateChangeMempoolFile       *os.File
-	StateChangeMempoolFileReader *bufio.Reader
+	StateChangeMempoolFile           *os.File
+	StateChangeMempoolFirstEntryFile *os.File
+	StateChangeMempoolFileReader     *bufio.Reader
 
 	// An ordered slice containing every mempool entry that has been applied to the database.
 	AppliedMempoolEntries []*lib.StateChangeEntry
@@ -129,6 +130,12 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 	if stateChangeMempoolFile, err := os.Open(stateChangeMempoolFilePath); err == nil {
 		consumer.StateChangeMempoolFile = stateChangeMempoolFile
 		consumer.StateChangeMempoolFileReader = bufio.NewReader(consumer.StateChangeMempoolFile)
+	} else {
+		return errors.Wrapf(err, "consumer.initialize: Error opening mempool state change file")
+	}
+
+	if stateChangeMempoolFile, err := os.Open(stateChangeMempoolFilePath); err == nil {
+		consumer.StateChangeMempoolFirstEntryFile = stateChangeMempoolFile
 	} else {
 		return errors.Wrapf(err, "consumer.initialize: Error opening mempool state change file")
 	}
