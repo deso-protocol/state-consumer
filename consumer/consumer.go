@@ -60,6 +60,10 @@ type StateSyncerConsumer struct {
 
 	// Track whether we're currently hypersyncing.
 	IsHypersyncing bool
+
+	// Whether to wrap each batch in a db transaction.
+	ExecuteTransactions bool
+
 	// Track whether we're currently syncing from the beginning.
 	SyncingFromBeginning bool
 
@@ -101,6 +105,7 @@ func (consumer *StateSyncerConsumer) InitializeAndRun(
 func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerProgressDir string, batchBytes uint64, threadLimit int, handler StateSyncerDataHandler) error {
 	// Set up the data handler initial values.
 	consumer.IsHypersyncing = false
+	consumer.ExecuteTransactions = false
 	consumer.BatchCount = 0
 	consumer.EntryCount = 0
 	consumer.MaxBatchBytes = batchBytes
@@ -487,6 +492,7 @@ func (consumer *StateSyncerConsumer) detectAndHandleSyncEvent(stateChangeEntry *
 		consumer.DBBlockingWG.Wait()
 		// Set the hypersyncing flag to false and close the channels.
 		consumer.IsHypersyncing = false
+		consumer.ExecuteTransactions = true
 		close(consumer.DBBlockingChannel)
 		if err := consumer.DataHandler.HandleSyncEvent(SyncEventHypersyncComplete); err != nil {
 			return errors.Wrapf(err, "consumer.detectAndHandleSyncEvent: Error handling hypersync complete event")
@@ -513,16 +519,44 @@ func (consumer *StateSyncerConsumer) detectAndHandleSyncEvent(stateChangeEntry *
 
 // watchFileAndScanOnWrite continually triggers a new processNewEntriesInFile of the consumer. If there are any new changes that have been
 // written, they will be captured by the processNewEntriesInFile, otherwise the processNewEntriesInFile will exit.
-func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() error {
+func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() (err error) {
 	for {
-		time.Sleep(50 * time.Millisecond)
-		// Process any new committed entries.
-		if err := consumer.processNewEntriesInFile(false); err != nil {
-			return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning committed entries")
-		}
-		// Process any new mempool entries
-		if err := consumer.processNewEntriesInFile(true); err != nil {
-			return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning mempool entries")
+		err = func() error {
+			// Short sleep to prevent busy-waiting.
+			time.Sleep(25 * time.Millisecond)
+
+			// If we are executing transactions, initiate a new transaction.
+			// This should occur after hypersync is complete.
+			if consumer.ExecuteTransactions {
+				err = consumer.DataHandler.InitiateTransaction()
+				if err != nil {
+					return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error initiating transaction")
+				}
+				defer func() {
+					// Call CommitTransaction and handle any potential error.
+					if commitErr := consumer.DataHandler.CommitTransaction(); commitErr != nil {
+						// If there's an error, wrap it with additional context and assign it to the named return variable.
+						err = fmt.Errorf("consumer.processNewEntriesInFile: error committing transaction: %w", commitErr)
+					}
+				}()
+			}
+			// Process any new committed entries.
+			if err = consumer.processNewEntriesInFile(false); err != nil {
+				return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning committed entries")
+			}
+			//currentPos, readErr := consumer.StateChangeMempoolFile.Seek(0, io.SeekCurrent)
+			//if readErr != nil {
+			//	fmt.Printf("Error getting current mempool pos: %v\n", readErr)
+			//}
+			//fmt.Printf("About to process new mempool entries, starting at index %v\n", currentPos)
+			// Process any new mempool entries
+			if err = consumer.processNewEntriesInFile(true); err != nil {
+				return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning mempool entries")
+			}
+			return nil
+		}()
+		if err != nil {
+			return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error processing new entries")
 		}
 	}
 }
@@ -621,6 +655,7 @@ func (consumer *StateSyncerConsumer) checkBlockSyncStart() error {
 		return nil
 	}
 	if nextStateChangeEntry.OperationType != lib.DbOperationTypeInsert {
+		consumer.ExecuteTransactions = true
 		if err = consumer.DataHandler.HandleSyncEvent(SyncEventBlocksyncStart); err != nil {
 			return errors.Wrapf(err, "consumer.detectAndHandleSyncEvent: Error handling blocksync start event")
 		}

@@ -20,4 +20,7 @@ const (
 type StateSyncerDataHandler interface {
 	HandleEntryBatch(batchedEntries []*lib.StateChangeEntry) error
 	HandleSyncEvent(syncEvent SyncEvent) error
+	InitiateTransaction() error
+	CommitTransaction() error
+	RollbackTransaction() error
 }
