@@ -408,7 +408,7 @@ func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader
 	// Decode the state change entry.
 	stateChangeEntry := &lib.StateChangeEntry{}
 
-	// Create defered function to handle any panics that occur during decoding.
+	// Create deferred function to handle any panics that occur during decoding.
 	defer func() {
 		if r := recover(); r != nil {
 			file.Seek(currentPos, io.SeekStart)
