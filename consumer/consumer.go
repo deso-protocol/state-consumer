@@ -544,11 +544,7 @@ func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() (err error) {
 			if err = consumer.processNewEntriesInFile(false); err != nil {
 				return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning committed entries")
 			}
-			//currentPos, readErr := consumer.StateChangeMempoolFile.Seek(0, io.SeekCurrent)
-			//if readErr != nil {
-			//	fmt.Printf("Error getting current mempool pos: %v\n", readErr)
-			//}
-			//fmt.Printf("About to process new mempool entries, starting at index %v\n", currentPos)
+			
 			// Process any new mempool entries
 			if err = consumer.processNewEntriesInFile(true); err != nil {
 				return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning mempool entries")
