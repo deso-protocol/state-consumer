@@ -26,8 +26,9 @@ type StateSyncerConsumer struct {
 	StateChangeFile       *os.File
 	StateChangeFileReader *bufio.Reader
 
-	StateChangeMempoolFile       *os.File
-	StateChangeMempoolFileReader *bufio.Reader
+	StateChangeMempoolFile           *os.File
+	StateChangeMempoolFirstEntryFile *os.File
+	StateChangeMempoolFileReader     *bufio.Reader
 
 	// An ordered slice containing every mempool entry that has been applied to the database.
 	AppliedMempoolEntries []*lib.StateChangeEntry
@@ -59,6 +60,10 @@ type StateSyncerConsumer struct {
 
 	// Track whether we're currently hypersyncing.
 	IsHypersyncing bool
+
+	// Whether to wrap each batch in a db transaction.
+	ExecuteTransactions bool
+
 	// Track whether we're currently syncing from the beginning.
 	SyncingFromBeginning bool
 
@@ -100,6 +105,7 @@ func (consumer *StateSyncerConsumer) InitializeAndRun(
 func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerProgressDir string, batchBytes uint64, threadLimit int, handler StateSyncerDataHandler) error {
 	// Set up the data handler initial values.
 	consumer.IsHypersyncing = false
+	consumer.ExecuteTransactions = false
 	consumer.BatchCount = 0
 	consumer.EntryCount = 0
 	consumer.MaxBatchBytes = batchBytes
@@ -124,6 +130,12 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 	if stateChangeMempoolFile, err := os.Open(stateChangeMempoolFilePath); err == nil {
 		consumer.StateChangeMempoolFile = stateChangeMempoolFile
 		consumer.StateChangeMempoolFileReader = bufio.NewReader(consumer.StateChangeMempoolFile)
+	} else {
+		return errors.Wrapf(err, "consumer.initialize: Error opening mempool state change file")
+	}
+
+	if stateChangeMempoolFile, err := os.Open(stateChangeMempoolFilePath); err == nil {
+		consumer.StateChangeMempoolFirstEntryFile = stateChangeMempoolFile
 	} else {
 		return errors.Wrapf(err, "consumer.initialize: Error opening mempool state change file")
 	}
@@ -330,7 +342,7 @@ func (consumer *StateSyncerConsumer) RevertMempoolEntries() error {
 }
 
 // readAndDecodeNextEntry reads the next state change entry from the state change file and decodes it as a deso encoder.
-func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader, file *os.File) (*lib.StateChangeEntry, bool, error) {
+func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader, file *os.File) (sce *lib.StateChangeEntry, eof bool, err error) {
 	// Get the current position in the file
 	currentPos, err := file.Seek(0, io.SeekCurrent)
 	if err != nil {
@@ -341,13 +353,25 @@ func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader
 	if err != nil && (errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)) {
 		// If it's an unexpected EOF, log it and return true to signify EOF.
 		glog.V(2).Infof("consumer.readAndDecodeNextEntry: Error reading from state change file: %v", err)
+
 		// Reset the reader to the position before the unexpected EOF.
 		if _, err = file.Seek(currentPos, io.SeekStart); err != nil {
 			return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error seeking to current position in file")
 		}
 		return nil, true, nil
 	} else if err != nil {
+		if _, err = file.Seek(currentPos, io.SeekStart); err != nil {
+			return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error seeking to current position in file")
+		}
 		return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error reading from state change file")
+	}
+
+	if err = CheckSliceSize(int(entryByteSize)); err != nil {
+		// Reset the reader.
+		if _, err = file.Seek(currentPos, io.SeekStart); err != nil {
+			return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error seeking to current position in file")
+		}
+		return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error checking slice size")
 	}
 
 	// Create a buffer to hold the entry.
@@ -355,6 +379,9 @@ func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader
 	bytesRead, err := io.ReadFull(reader, buffer)
 	// If there are no bytes to read, return true to signify EOF.
 	if bytesRead == 0 {
+		if _, err = file.Seek(currentPos, io.SeekStart); err != nil {
+			return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error seeking to current position in file")
+		}
 		return nil, true, nil
 	} else if err != nil && (errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)) {
 		// If it's an unexpected EOF, log it and return true to signify EOF.
@@ -365,18 +392,38 @@ func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader
 		}
 		return nil, true, nil
 	} else if err != nil {
+		// Reset the reader to the position before the unexpected EOF.
+		if _, err = file.Seek(currentPos, io.SeekStart); err != nil {
+			return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error seeking to current position in file")
+		}
 		return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error reading from state change file")
 	} else if bytesRead < int(entryByteSize) {
+		// Reset the reader to the position before the unexpected EOF.
+		if _, err = file.Seek(currentPos, io.SeekStart); err != nil {
+			return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error seeking to current position in file")
+		}
 		return nil, false, fmt.Errorf("consumer.readAndDecodeNextEntry: Not enough bytes read from state change file. Expected %d, got %d", entryByteSize, bytesRead)
 	}
 
 	// Decode the state change entry.
 	stateChangeEntry := &lib.StateChangeEntry{}
+
+	// Create deferred function to handle any panics that occur during decoding.
+	defer func() {
+		if r := recover(); r != nil {
+			file.Seek(currentPos, io.SeekStart)
+			err = fmt.Errorf("consumer.readAndDecodeNextEntry: Panic decoding entry: %v", r)
+			eof = false
+			sce = nil
+		}
+
+	}()
 	if err = DecodeEntry(stateChangeEntry, buffer); err != nil {
+		file.Seek(currentPos, io.SeekStart)
 		return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error decoding entry")
 	}
 
-	return stateChangeEntry, false, nil
+	return stateChangeEntry, false, err
 }
 
 // retrieveNextEntry reads the next StateChangeEntry bytes from the state change file and decode them.
@@ -393,27 +440,20 @@ func (consumer *StateSyncerConsumer) retrieveNextEntry(isMempool bool) (*lib.Sta
 
 	// If mempool, check first entry to see if the flush ID has changed.
 	if isMempool {
-		// Get the current position in the mempool file
-		currentPos, err := consumer.StateChangeMempoolFile.Seek(0, io.SeekCurrent)
-		if err != nil {
-			return nil, false, errors.Wrapf(err, "consumer.retrieveNextEntry: Error getting current position in mempool file")
-		}
-		if _, err = consumer.StateChangeMempoolFile.Seek(0, io.SeekStart); err != nil {
+		// Scan the first entry in the mempool file to see if the flush ID has changed.
+		if _, err := consumer.StateChangeMempoolFirstEntryFile.Seek(0, io.SeekStart); err != nil {
 			return nil, false, errors.Wrapf(err, "consumer.retrieveNextEntry: Error seeking to start of mempool file")
 		}
 		// Read the first mempool entry to see if the flush ID has changed.
-		firstEntryReader := bufio.NewReader(consumer.StateChangeMempoolFile)
-		mempoolFirstEntry, eof, err := consumer.readAndDecodeNextEntry(firstEntryReader, consumer.StateChangeMempoolFile)
+		firstEntryReader := bufio.NewReader(consumer.StateChangeMempoolFirstEntryFile)
+
+		mempoolFirstEntry, eof, err := consumer.readAndDecodeNextEntry(firstEntryReader, consumer.StateChangeMempoolFirstEntryFile)
 		if eof {
 			return nil, true, nil
 		} else if err != nil {
 			return nil, false, errors.Wrapf(err, "consumer.retrieveNextEntry: Error reading and decoding first mempool entry")
 		}
 
-		// Reset the mempool reader to the current position.
-		if _, err = consumer.StateChangeMempoolFile.Seek(currentPos, io.SeekStart); err != nil {
-			return nil, false, errors.Wrapf(err, "consumer.retrieveNextEntry: Error seeking to current position in mempool file")
-		}
 		// If the flush ID has changed, revert the current mempool entries and reset the mempool reader.
 		if mempoolFirstEntry.FlushId != consumer.CurrentMempoolEntryFlushId {
 			if err = consumer.RevertMempoolEntries(); err != nil {
@@ -452,6 +492,7 @@ func (consumer *StateSyncerConsumer) detectAndHandleSyncEvent(stateChangeEntry *
 		consumer.DBBlockingWG.Wait()
 		// Set the hypersyncing flag to false and close the channels.
 		consumer.IsHypersyncing = false
+		consumer.ExecuteTransactions = true
 		close(consumer.DBBlockingChannel)
 		if err := consumer.DataHandler.HandleSyncEvent(SyncEventHypersyncComplete); err != nil {
 			return errors.Wrapf(err, "consumer.detectAndHandleSyncEvent: Error handling hypersync complete event")
@@ -478,16 +519,40 @@ func (consumer *StateSyncerConsumer) detectAndHandleSyncEvent(stateChangeEntry *
 
 // watchFileAndScanOnWrite continually triggers a new processNewEntriesInFile of the consumer. If there are any new changes that have been
 // written, they will be captured by the processNewEntriesInFile, otherwise the processNewEntriesInFile will exit.
-func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() error {
+func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() (err error) {
 	for {
-		time.Sleep(50 * time.Millisecond)
-		// Process any new committed entries.
-		if err := consumer.processNewEntriesInFile(false); err != nil {
-			return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning committed entries")
-		}
-		// Process any new mempool entries
-		if err := consumer.processNewEntriesInFile(true); err != nil {
-			return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning mempool entries")
+		err = func() error {
+			// Short sleep to prevent busy-waiting.
+			time.Sleep(25 * time.Millisecond)
+
+			// If we are executing transactions, initiate a new transaction.
+			// This should occur after hypersync is complete.
+			if consumer.ExecuteTransactions {
+				err = consumer.DataHandler.InitiateTransaction()
+				if err != nil {
+					return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error initiating transaction")
+				}
+				defer func() {
+					// Call CommitTransaction and handle any potential error.
+					if commitErr := consumer.DataHandler.CommitTransaction(); commitErr != nil {
+						// If there's an error, wrap it with additional context and assign it to the named return variable.
+						err = fmt.Errorf("consumer.processNewEntriesInFile: error committing transaction: %w", commitErr)
+					}
+				}()
+			}
+			// Process any new committed entries.
+			if err = consumer.processNewEntriesInFile(false); err != nil {
+				return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning committed entries")
+			}
+			
+			// Process any new mempool entries
+			if err = consumer.processNewEntriesInFile(true); err != nil {
+				return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning mempool entries")
+			}
+			return nil
+		}()
+		if err != nil {
+			return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error processing new entries")
 		}
 	}
 }
@@ -529,7 +594,6 @@ func (consumer *StateSyncerConsumer) retrieveLastSyncedStateChangeEntryIndex() (
 // It does this by reading the last saved entry index from the entry index file and multiplying it by 4 to get the
 // byte index in the state change index file.
 func (consumer *StateSyncerConsumer) retrieveFileIndexForDbOperation(startEntryIndex uint64) (uint64, error) {
-	fmt.Printf("Last scanned index: %d\n", startEntryIndex)
 	consumer.EntryCount = startEntryIndex
 	consumer.LastScannedIndex = startEntryIndex
 	// Find the byte index in the state change file for the next db operation. Each entry byte index is represented
@@ -587,6 +651,7 @@ func (consumer *StateSyncerConsumer) checkBlockSyncStart() error {
 		return nil
 	}
 	if nextStateChangeEntry.OperationType != lib.DbOperationTypeInsert {
+		consumer.ExecuteTransactions = true
 		if err = consumer.DataHandler.HandleSyncEvent(SyncEventBlocksyncStart); err != nil {
 			return errors.Wrapf(err, "consumer.detectAndHandleSyncEvent: Error handling blocksync start event")
 		}
