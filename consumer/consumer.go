@@ -552,6 +552,8 @@ func (consumer *StateSyncerConsumer) retrieveNextEntry(isMempool bool) (*lib.Sta
 		return nil, true, nil
 	} else if err != nil {
 		return nil, false, errors.Wrapf(err, "consumer.retrieveNextEntry: Error reading and decoding entry")
+	} else if stateChangeEntry == nil {
+		return nil, false, fmt.Errorf("consumer.retrieveNextEntry: Nil state change entry")
 	}
 
 	return stateChangeEntry, false, nil
