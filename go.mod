@@ -9,7 +9,7 @@ require (
 	github.com/deso-protocol/core v1.2.9
 	github.com/golang/glog v1.2.1
 	github.com/google/uuid v1.6.0
-	github.com/holiman/uint256 v1.2.4
+	github.com/holiman/uint256 v1.2.3
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.9.0
 	github.com/uptrace/bun/extra/bunbig v1.2.1
@@ -35,7 +35,7 @@ require (
 	github.com/dgraph-io/ristretto v0.1.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
-	github.com/ethereum/go-ethereum v1.13.14 // indirect
+	github.com/ethereum/go-ethereum v1.13.5 // indirect
 	github.com/fatih/color v1.16.0 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/gernest/mention v2.0.0+incompatible // indirect
