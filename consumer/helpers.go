@@ -6,16 +6,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"time"
+
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/deso-protocol/core/lib"
 	"github.com/golang/glog"
 	"github.com/holiman/uint256"
 	"github.com/pkg/errors"
 	"github.com/uptrace/bun/extra/bunbig"
-	"os"
-	"path/filepath"
-	"reflect"
-	"time"
 )
 
 // CopyStruct takes 2 structs and copies values from fields of the same name from the source struct to the destination struct.
@@ -1287,7 +1288,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		validatorPublicKeyBase58Check := lib.PkToString(realTxMeta.ValidatorPublicKey.ToBytes(), params)
 
 		// Calculate TotalUnlockedAmountNanos.
-		totalUnlockedAmountNanos := uint256.NewInt(0)
+		totalUnlockedAmountNanos := uint256.NewInt()
 		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeUnlockStake)
 		var err error
 		for _, prevLockedStakeEntry := range utxoOp.PrevLockedStakeEntries {
@@ -1296,7 +1297,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 			)
 			if err != nil {
 				glog.Errorf("CreateUnlockStakeTxindexMetadata: error calculating TotalUnlockedAmountNanos: %v", err)
-				totalUnlockedAmountNanos = uint256.NewInt(0)
+				totalUnlockedAmountNanos = uint256.NewInt()
 				break
 			}
 		}
