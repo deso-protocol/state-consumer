@@ -456,7 +456,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		if len(realTxMeta.PostHashToModify) == 0 && len(realTxMeta.ParentStakeID) == lib.HashSizeBytes {
 			postHash := &lib.BlockHash{}
 			copy(postHash[:], realTxMeta.ParentStakeID)
-			postEntry := stateChangeMetadata.PostEntry
+			postEntry := stateChangeMetadata.ParentPostEntry
 			if postEntry == nil {
 				glog.V(2).Infof(
 					"UpdateTxindex: Error creating SubmitPostTxindexMetadata; "+
