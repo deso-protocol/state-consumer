@@ -111,6 +111,7 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 	consumer.MaxBatchBytes = batchBytes
 	consumer.ThreadLimit = threadLimit
 	consumer.DataHandler = handler
+	lib.GlobalDeSoParams = *handler.GetParams()
 	consumer.DBBlockingChannel = make(chan bool, threadLimit)
 	consumer.AppliedMempoolEntries = make([]*lib.StateChangeEntry, 0)
 	consumer.CurrentMempoolEntryFlushId = uuid.Nil
@@ -544,7 +545,7 @@ func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() (err error) {
 			if err = consumer.processNewEntriesInFile(false); err != nil {
 				return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning committed entries")
 			}
-			
+
 			// Process any new mempool entries
 			if err = consumer.processNewEntriesInFile(true); err != nil {
 				return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning mempool entries")
