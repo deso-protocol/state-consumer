@@ -538,6 +538,7 @@ func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() (err error) {
 					if commitErr := consumer.DataHandler.CommitTransaction(); commitErr != nil {
 						// If there's an error, wrap it with additional context and assign it to the named return variable.
 						err = fmt.Errorf("consumer.processNewEntriesInFile: error committing transaction: %w", commitErr)
+						fmt.Printf("Error committing transaction: %v\n", commitErr)
 					}
 				}()
 			}
