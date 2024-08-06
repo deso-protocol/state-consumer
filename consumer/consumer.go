@@ -254,9 +254,12 @@ func (consumer *StateSyncerConsumer) SyncCommittedEntry(stateChangeEntry *lib.St
 	if stateChangeEntry.FlushId != consumer.CurrentConfirmedEntryFlushId {
 		// Commit old transaction and begin new one on new block mine.
 		if consumer.ExecuteTransactions {
-			if err := consumer.DataHandler.CommitTransaction(); err != nil {
-				// If there's an error, wrap it with additional context and assign it to the named return variable.
-				return errors.Wrapf(err, "consumer.processNewEntriesInFile: error committing transaction")
+			// If the current confirmed entry flush id is nil, then there is no transaction to commit.
+			if consumer.CurrentConfirmedEntryFlushId != uuid.Nil {
+				if err := consumer.DataHandler.CommitTransaction(); err != nil {
+					// If there's an error, wrap it with additional context and assign it to the named return variable.
+					return errors.Wrapf(err, "consumer.processNewEntriesInFile: error committing transaction")
+				}
 			}
 			if err := consumer.DataHandler.InitiateTransaction(); err != nil {
 				return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error initiating transaction")
