@@ -252,6 +252,17 @@ func (consumer *StateSyncerConsumer) processNewEntriesInFile(isMempool bool) err
 func (consumer *StateSyncerConsumer) SyncCommittedEntry(stateChangeEntry *lib.StateChangeEntry) error {
 	// If the entry is from a new flush (i.e. a new block), revert the current mempool entries before applying.
 	if stateChangeEntry.FlushId != consumer.CurrentConfirmedEntryFlushId {
+		// Commit old transaction and begin new one on new block mine.
+		if consumer.ExecuteTransactions {
+			if err := consumer.DataHandler.CommitTransaction(); err != nil {
+				// If there's an error, wrap it with additional context and assign it to the named return variable.
+				return errors.Wrapf(err, "consumer.processNewEntriesInFile: error committing transaction")
+			}
+			if err := consumer.DataHandler.InitiateTransaction(); err != nil {
+				return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error initiating transaction")
+			}
+		}
+
 		if err := consumer.RevertMempoolEntries(); err != nil {
 			return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error reverting mempool entries")
 		}
