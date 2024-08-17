@@ -18,7 +18,7 @@ const (
 // The StateSyncerDataHandler interface is implemented by the data handler implementation. It is used by the
 // consumer to get the relevant encoder for a given prefix id.
 type StateSyncerDataHandler interface {
-	HandleEntryBatch(batchedEntries []*lib.StateChangeEntry) error
+	HandleEntryBatch(batchedEntries []*lib.StateChangeEntry, isMempool bool) error
 	HandleSyncEvent(syncEvent SyncEvent) error
 	InitiateTransaction() error
 	CommitTransaction() error

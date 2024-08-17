@@ -77,6 +77,9 @@ type StateSyncerConsumer struct {
 
 	// Indexes to track asynchronous batch handling progress during hypersync.
 	BatchIndexes []*BatchIndexInfo
+
+	// Whether to stop the consumer.
+	StopConsumer bool
 }
 
 func (consumer *StateSyncerConsumer) InitializeAndRun(
@@ -307,6 +310,7 @@ func (consumer *StateSyncerConsumer) RevertMempoolEntry(stateChangeEntry *lib.St
 		// If the ancestral record exists, update the db record to that value.
 		revertEntry.OperationType = lib.DbOperationTypeUpsert
 		revertEntry.Encoder = revertEntry.AncestralRecord
+		revertEntry.EncoderBytes = revertEntry.AncestralRecordBytes
 	}
 
 	// Handle the reverted state change entry.
@@ -521,7 +525,7 @@ func (consumer *StateSyncerConsumer) detectAndHandleSyncEvent(stateChangeEntry *
 // watchFileAndScanOnWrite continually triggers a new processNewEntriesInFile of the consumer. If there are any new changes that have been
 // written, they will be captured by the processNewEntriesInFile, otherwise the processNewEntriesInFile will exit.
 func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() (err error) {
-	for {
+	for !consumer.StopConsumer {
 		err = func() error {
 			// Short sleep to prevent busy-waiting.
 			time.Sleep(25 * time.Millisecond)
@@ -556,6 +560,7 @@ func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() (err error) {
 			return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error processing new entries")
 		}
 	}
+	return nil
 }
 
 // waitForStateChangesFile blocks execution until the state changes file is created, and then assigns it to the consumer.
@@ -766,4 +771,8 @@ func (consumer *StateSyncerConsumer) cleanup() error {
 		return errors.Wrapf(err, "consumer.cleanup: Error executing final batch")
 	}
 	return nil
+}
+
+func (consumer *StateSyncerConsumer) Stop() {
+	consumer.StopConsumer = true
 }
