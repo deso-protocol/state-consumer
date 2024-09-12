@@ -490,9 +490,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 			// Additionally, we need to check if this post is a repost and
 			// fetch the original poster
 			if repostedPostHash, isRepost := extraData[lib.RepostedPostHash]; isRepost {
-				repostedBlockHash := &lib.BlockHash{}
-				copy(repostedBlockHash[:], repostedPostHash)
-				// TODO: How to get this
+				txnMeta.SubmitPostTxindexMetadata.ParentPostHashHex = hex.EncodeToString(repostedPostHash)
 				repostPost := stateChangeMetadata.RepostPostEntry
 				if repostPost != nil {
 					txnMeta.AffectedPublicKeys = append(txnMeta.AffectedPublicKeys, &lib.AffectedPublicKey{
