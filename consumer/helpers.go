@@ -9,10 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"time"
 
 	"github.com/btcsuite/btcd/btcec"
+	"github.com/deso-protocol/backend/routes"
 	"github.com/deso-protocol/core/lib"
 	"github.com/golang/glog"
 	"github.com/holiman/uint256"
@@ -182,94 +182,50 @@ func DecodeDesoBodySchema(bodyBytes []byte) (*lib.DeSoBodySchema, error) {
 	return &body, nil
 }
 
-var extraDataCustomEncodings = map[string]func([]byte, *lib.DeSoParams) string{
-	lib.RepostedPostHash:  decodeHexString,
-	lib.IsQuotedRepostKey: decodeBoolString,
-	lib.IsFrozenKey:       decodeBoolString,
+var extraDataCustomEncodings = map[string]func([]byte, *lib.DeSoParams, *lib.UtxoView) string{
+	lib.RepostedPostHash:  routes.DecodeHexString,
+	lib.IsQuotedRepostKey: routes.DecodeBoolString,
+	lib.IsFrozenKey:       routes.DecodeBoolString,
 
-	lib.USDCentsPerBitcoinKey:      decode64BitUintString,
-	lib.MinNetworkFeeNanosPerKBKey: decode64BitUintString,
-	lib.CreateProfileFeeNanosKey:   decode64BitUintString,
-	lib.CreateNFTFeeNanosKey:       decode64BitUintString,
-	lib.MaxCopiesPerNFTKey:         decode64BitUintString,
+	lib.USDCentsPerBitcoinKey:      routes.Decode64BitUintString,
+	lib.MinNetworkFeeNanosPerKBKey: routes.Decode64BitUintString,
+	lib.CreateProfileFeeNanosKey:   routes.Decode64BitUintString,
+	lib.CreateNFTFeeNanosKey:       routes.Decode64BitUintString,
+	lib.MaxCopiesPerNFTKey:         routes.Decode64BitUintString,
 
-	lib.ForbiddenBlockSignaturePubKeyKey: decodePkToString,
+	lib.ForbiddenBlockSignaturePubKeyKey: routes.DecodePkToString,
 
-	lib.DiamondLevelKey:    decode64BitIntString,
-	lib.DiamondPostHashKey: decodeHexString,
+	lib.DiamondLevelKey:    routes.Decode64BitIntString,
+	lib.DiamondPostHashKey: routes.DecodeHexString,
 
-	lib.DerivedPublicKey: decodePkToString,
+	lib.DerivedPublicKey: routes.DecodePkToString,
 
-	lib.MessagingPublicKey:             decodePkToString,
-	lib.SenderMessagingPublicKey:       decodePkToString,
-	lib.SenderMessagingGroupKeyName:    decodeString,
-	lib.RecipientMessagingPublicKey:    decodePkToString,
-	lib.RecipientMessagingGroupKeyName: decodeString,
+	lib.MessagingPublicKey:             routes.DecodePkToString,
+	lib.SenderMessagingPublicKey:       routes.DecodePkToString,
+	lib.SenderMessagingGroupKeyName:    routes.DecodeString,
+	lib.RecipientMessagingPublicKey:    routes.DecodePkToString,
+	lib.RecipientMessagingGroupKeyName: routes.DecodeString,
 
-	lib.BuyNowPriceKey: decode64BitUintString,
+	lib.BuyNowPriceKey: routes.Decode64BitUintString,
 
-	lib.DESORoyaltiesMapKey:          decodePubKeyToUint64MapString,
-	lib.CoinRoyaltiesMapKey:          decodePubKeyToUint64MapString,
-	lib.TokenTradingFeesByPkidMapKey: decodePubKeyToUint64MapString,
+	lib.DESORoyaltiesMapKey:          routes.DecodePubKeyToUint64MapString,
+	lib.CoinRoyaltiesMapKey:          routes.DecodePubKeyToUint64MapString,
+	lib.TokenTradingFeesByPkidMapKey: routes.DecodePubKeyToUint64MapString,
 
-	lib.MessagesVersionString: decode64BitUintString,
+	lib.MessagesVersionString: routes.Decode64BitUintString,
 
-	lib.NodeSourceMapKey: decode64BitUintString,
+	lib.NodeSourceMapKey: routes.Decode64BitUintString,
 
-	lib.DerivedKeyMemoKey: decodeDerivedKeyMemo,
+	lib.DerivedKeyMemoKey: routes.DecodeDerivedKeyMemo,
 
-	// lib.TransactionSpendingLimitKey: decodeTransactionSpendingLimit,
-}
-
-func decodeString(inputBytes []byte, _ *lib.DeSoParams) string {
-	return string(inputBytes)
-}
-
-func decodeHexString(inputBytes []byte, _ *lib.DeSoParams) string {
-	return hex.EncodeToString(inputBytes)
-}
-
-func decodeBoolString(inputBytes []byte, _ *lib.DeSoParams) string {
-	if bytes.Equal(inputBytes, []byte{1}) {
-		return "1"
-	}
-	return "0"
-}
-
-func decodePkToString(inputBytes []byte, params *lib.DeSoParams) string {
-	return lib.PkToString(inputBytes, params)
-}
-
-func decode64BitIntString(inputBytes []byte, _ *lib.DeSoParams) string {
-	var decoded, _ = lib.Varint(inputBytes)
-	return strconv.FormatInt(decoded, 10)
-}
-
-func decode64BitUintString(inputBytes []byte, _ *lib.DeSoParams) string {
-	var decoded, _ = lib.Uvarint(inputBytes)
-	return strconv.FormatUint(decoded, 10)
-}
-
-func decodePubKeyToUint64MapString(inputBytes []byte, params *lib.DeSoParams) string {
-	var decoded, _ = lib.DeserializePubKeyToUint64Map(inputBytes)
-	mapWithDecodedKeys := map[string]uint64{}
-	for k, v := range decoded {
-		mapWithDecodedKeys[lib.PkToString(k.ToBytes(), params)] = v
-	}
-	return fmt.Sprint(mapWithDecodedKeys)
-}
-
-func decodeDerivedKeyMemo(inputBytes []byte, _ *lib.DeSoParams) string {
-	decodedBytes := make([]byte, hex.DecodedLen(len(inputBytes)))
-	_, _ = hex.Decode(decodedBytes, inputBytes)
-	return string(decodedBytes)
+	lib.TransactionSpendingLimitKey: routes.DecodeString, // This differs from backend since UtxoView is nil.
 }
 
 func ExtraDataBytesToString(extraData map[string][]byte, params *lib.DeSoParams) map[string]string {
 	newMap := make(map[string]string)
 	for key, value := range extraData {
 		if encoderFunc, exists := extraDataCustomEncodings[key]; exists {
-			newMap[key] = encoderFunc(value, params)
+			newMap[key] = encoderFunc(value, params, nil)
 			continue
 		}
 		newMap[key] = string(value)
