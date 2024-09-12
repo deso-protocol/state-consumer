@@ -181,14 +181,14 @@ func DecodeDesoBodySchema(bodyBytes []byte) (*lib.DeSoBodySchema, error) {
 	return &body, nil
 }
 
-var ExtraDataSpecialEncoding = map[string]func([]byte) string{
+var ExtraDataSpecialEncodings = map[string]func([]byte) string{
 	lib.RepostedPostHash: hex.EncodeToString,
 }
 
 func ExtraDataBytesToString(extraData map[string][]byte) map[string]string {
 	newMap := make(map[string]string)
 	for key, value := range extraData {
-		if encodeFunc, exists := ExtraDataSpecialEncoding[key]; exists {
+		if encodeFunc, exists := ExtraDataSpecialEncodings[key]; exists {
 			newMap[key] = encodeFunc(value)
 			continue
 		}
