@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcd/btcec"
+	"github.com/deso-protocol/backend/routes"
 	"github.com/deso-protocol/core/lib"
 	"github.com/golang/glog"
 	"github.com/holiman/uint256"
@@ -181,9 +182,52 @@ func DecodeDesoBodySchema(bodyBytes []byte) (*lib.DeSoBodySchema, error) {
 	return &body, nil
 }
 
-func ExtraDataBytesToString(extraData map[string][]byte) map[string]string {
+var extraDataCustomEncodings = map[string]func([]byte, *lib.DeSoParams, *lib.UtxoView) string{
+	lib.RepostedPostHash:  routes.DecodeHexString,
+	lib.IsQuotedRepostKey: routes.DecodeBoolString,
+	lib.IsFrozenKey:       routes.DecodeBoolString,
+
+	lib.USDCentsPerBitcoinKey:      routes.Decode64BitUintString,
+	lib.MinNetworkFeeNanosPerKBKey: routes.Decode64BitUintString,
+	lib.CreateProfileFeeNanosKey:   routes.Decode64BitUintString,
+	lib.CreateNFTFeeNanosKey:       routes.Decode64BitUintString,
+	lib.MaxCopiesPerNFTKey:         routes.Decode64BitUintString,
+
+	lib.ForbiddenBlockSignaturePubKeyKey: routes.DecodePkToString,
+
+	lib.DiamondLevelKey:    routes.Decode64BitIntString,
+	lib.DiamondPostHashKey: routes.DecodeHexString,
+
+	lib.DerivedPublicKey: routes.DecodePkToString,
+
+	lib.MessagingPublicKey:             routes.DecodePkToString,
+	lib.SenderMessagingPublicKey:       routes.DecodePkToString,
+	lib.SenderMessagingGroupKeyName:    routes.DecodeString,
+	lib.RecipientMessagingPublicKey:    routes.DecodePkToString,
+	lib.RecipientMessagingGroupKeyName: routes.DecodeString,
+
+	lib.BuyNowPriceKey: routes.Decode64BitUintString,
+
+	lib.DESORoyaltiesMapKey:          routes.DecodePubKeyToUint64MapString,
+	lib.CoinRoyaltiesMapKey:          routes.DecodePubKeyToUint64MapString,
+	lib.TokenTradingFeesByPkidMapKey: routes.DecodePubKeyToUint64MapString,
+
+	lib.MessagesVersionString: routes.Decode64BitUintString,
+
+	lib.NodeSourceMapKey: routes.Decode64BitUintString,
+
+	lib.DerivedKeyMemoKey: routes.DecodeDerivedKeyMemo,
+
+	lib.TransactionSpendingLimitKey: routes.DecodeString, // This differs from backend since UtxoView is nil.
+}
+
+func ExtraDataBytesToString(extraData map[string][]byte, params *lib.DeSoParams) map[string]string {
 	newMap := make(map[string]string)
 	for key, value := range extraData {
+		if encoderFunc, exists := extraDataCustomEncodings[key]; exists {
+			newMap[key] = encoderFunc(value, params, nil)
+			continue
+		}
 		newMap[key] = string(value)
 	}
 	return newMap
