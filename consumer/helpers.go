@@ -423,6 +423,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		})
 	case lib.TxnTypeSubmitPost:
 		realTxMeta := txn.TxnMeta.(*lib.SubmitPostMetadata)
+
 		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeSubmitPost)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
 			return nil, fmt.Errorf("ComputeTransactionMetadata: missing submit post utxo op error: %v", txn.Hash().String())

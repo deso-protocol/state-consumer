@@ -67,6 +67,9 @@ type StateSyncerConsumer struct {
 	// Track whether we're currently syncing from the beginning.
 	SyncingFromBeginning bool
 
+	// Whether to sync mempool entries, or only committed entries.
+	SyncMempoolEntires bool
+
 	// A counter to keep track of how many batches have been inserted.
 	BatchCount uint64
 	EntryCount uint64
@@ -81,9 +84,9 @@ type StateSyncerConsumer struct {
 
 func (consumer *StateSyncerConsumer) InitializeAndRun(
 	stateChangeDir string, consumerProgressFilename string, batchBytes uint64,
-	threadLimit int, handler StateSyncerDataHandler) error {
+	threadLimit int, syncMempool bool, handler StateSyncerDataHandler) error {
 	// initialize the consumer
-	err := consumer.initialize(stateChangeDir, consumerProgressFilename, batchBytes, threadLimit, handler)
+	err := consumer.initialize(stateChangeDir, consumerProgressFilename, batchBytes, threadLimit, syncMempool, handler)
 	if err != nil && err.Error() != "EOF" {
 		return errors.Wrapf(err, "consumer.InitializeAndRun: Error initializing consumer")
 	}
@@ -102,10 +105,11 @@ func (consumer *StateSyncerConsumer) InitializeAndRun(
 
 // Open the state change file and the index file, and determine the byte index that the state syncer should start
 // parsing at.
-func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerProgressDir string, batchBytes uint64, threadLimit int, handler StateSyncerDataHandler) error {
+func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerProgressDir string, batchBytes uint64, threadLimit int, syncMempool bool, handler StateSyncerDataHandler) error {
 	// Set up the data handler initial values.
 	consumer.IsHypersyncing = false
 	consumer.ExecuteTransactions = false
+	consumer.SyncMempoolEntires = syncMempool
 	consumer.BatchCount = 0
 	consumer.EntryCount = 0
 	consumer.MaxBatchBytes = batchBytes
@@ -547,8 +551,10 @@ func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() (err error) {
 			}
 
 			// Process any new mempool entries
-			if err = consumer.processNewEntriesInFile(true); err != nil {
-				return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning mempool entries")
+			if consumer.SyncMempoolEntires {
+				if err = consumer.processNewEntriesInFile(true); err != nil {
+					return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning mempool entries")
+				}
 			}
 			return nil
 		}()
