@@ -4,8 +4,11 @@ go 1.18
 
 replace github.com/deso-protocol/core => ../core/
 
+replace github.com/deso-protocol/backend => ../backend/
+
 require (
 	github.com/btcsuite/btcd v0.21.0-beta
+	github.com/deso-protocol/backend v0.0.0-00010101000000-000000000000
 	github.com/deso-protocol/core v0.0.0-00010101000000-000000000000
 	github.com/deso-protocol/postgres-data-handler v0.0.0-20240912231234-b3261335fcc4
 	github.com/golang/glog v1.0.0
@@ -43,7 +46,7 @@ require (
 	github.com/dustin/go-humanize v1.0.0 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/ethereum/go-ethereum v1.9.25 // indirect
-	github.com/fatih/color v1.15.0 // indirect
+	github.com/fatih/color v1.14.1 // indirect
 	github.com/fatih/structs v1.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.4.9 // indirect
 	github.com/gernest/mention v2.0.0+incompatible // indirect
@@ -58,7 +61,7 @@ require (
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/golang/snappy v0.0.3 // indirect
 	github.com/google/flatbuffers v2.0.0+incompatible // indirect
-	github.com/google/go-cmp v0.6.0 // indirect
+	github.com/google/go-cmp v0.5.9 // indirect
 	github.com/google/pprof v0.0.0-20210226084205-cbba55b83ad5 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.2.0 // indirect
 	github.com/googleapis/gax-go/v2 v2.7.0 // indirect
@@ -77,7 +80,7 @@ require (
 	github.com/kr/pretty v0.3.0 // indirect
 	github.com/magiconair/properties v1.8.1 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
-	github.com/mattn/go-isatty v0.0.19 // indirect
+	github.com/mattn/go-isatty v0.0.17 // indirect
 	github.com/mattn/goveralls v0.0.6 // indirect
 	github.com/mgutz/ansi v0.0.0-20170206155736-9520e82c474b // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
@@ -118,15 +121,15 @@ require (
 	github.com/vmihailenco/tagparser v0.1.2 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	go.opencensus.io v0.24.0 // indirect
-	golang.org/x/crypto v0.24.0 // indirect
-	golang.org/x/exp v0.0.0-20240613232115-7f521ea00fb8 // indirect
-	golang.org/x/net v0.26.0 // indirect
+	golang.org/x/crypto v0.6.0 // indirect
+	golang.org/x/image v0.15.0 // indirect
+	golang.org/x/net v0.7.0 // indirect
 	golang.org/x/oauth2 v0.4.0 // indirect
-	golang.org/x/sync v0.7.0 // indirect
-	golang.org/x/sys v0.21.0 // indirect
-	golang.org/x/text v0.16.0 // indirect
+	golang.org/x/sync v0.1.0 // indirect
+	golang.org/x/sys v0.5.0 // indirect
+	golang.org/x/text v0.14.0 // indirect
 	golang.org/x/time v0.0.0-20201208040808-7e3f01d25324 // indirect
-	golang.org/x/tools v0.22.0 // indirect
+	golang.org/x/tools v0.6.0 // indirect
 	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect
 	gonum.org/v1/gonum v0.6.1 // indirect
 	google.golang.org/api v0.103.0 // indirect
