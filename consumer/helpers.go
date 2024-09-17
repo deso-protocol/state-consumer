@@ -1108,14 +1108,15 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 
 		appPublicKeyBase58Check := lib.PkToString(realTxMeta.AppPublicKey.ToBytes(), params)
 
-		txnMeta.CreatePostAssociationTxindexMetadata = &lib.CreatePostAssociationTxindexMetadata{
-			PostHashHex:             hex.EncodeToString(realTxMeta.PostHash.ToBytes()),
-			AppPublicKeyBase58Check: appPublicKeyBase58Check,
-			AssociationType:         string(realTxMeta.AssociationType),
-			AssociationValue:        string(realTxMeta.AssociationValue),
-		}
-
 		postEntry := stateChangeMetadata.PostEntry
+
+		txnMeta.CreatePostAssociationTxindexMetadata = &lib.CreatePostAssociationTxindexMetadata{
+			PostHashHex:                hex.EncodeToString(realTxMeta.PostHash.ToBytes()),
+			PosterPublicKeyBase58Check: lib.PkToString(postEntry.PosterPublicKey, params),
+			AppPublicKeyBase58Check:    appPublicKeyBase58Check,
+			AssociationType:            string(realTxMeta.AssociationType),
+			AssociationValue:           string(realTxMeta.AssociationValue),
+		}
 
 		txnMeta.AffectedPublicKeys = append(txnMeta.AffectedPublicKeys, &lib.AffectedPublicKey{
 			PublicKeyBase58Check: lib.PkToString(postEntry.PosterPublicKey, params),
