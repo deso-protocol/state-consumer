@@ -10,12 +10,13 @@ require (
 	github.com/btcsuite/btcd v0.21.0-beta
 	github.com/deso-protocol/backend v0.0.0-00010101000000-000000000000
 	github.com/deso-protocol/core v0.0.0-00010101000000-000000000000
+	github.com/deso-protocol/postgres-data-handler v0.0.0-20240912231234-b3261335fcc4
 	github.com/golang/glog v1.0.0
-	github.com/google/uuid v1.3.0
+	github.com/google/uuid v1.6.0
 	github.com/holiman/uint256 v1.1.1
 	github.com/pkg/errors v0.9.1
-	github.com/stretchr/testify v1.8.1
-	github.com/uptrace/bun/extra/bunbig v1.1.12
+	github.com/stretchr/testify v1.9.0
+	github.com/uptrace/bun/extra/bunbig v1.1.14
 )
 
 require (
@@ -37,6 +38,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.0.1 // indirect
 	github.com/decred/dcrd/lru v1.1.1 // indirect
+	github.com/deso-protocol/backend v1.2.9 // indirect
 	github.com/deso-protocol/go-deadlock v1.0.0 // indirect
 	github.com/deso-protocol/go-merkle-tree v1.0.0 // indirect
 	github.com/dgraph-io/badger/v3 v3.2103.5 // indirect
@@ -49,6 +51,7 @@ require (
 	github.com/fsnotify/fsnotify v1.4.9 // indirect
 	github.com/gernest/mention v2.0.0+incompatible // indirect
 	github.com/git-chglog/git-chglog v0.0.0-20200414013904-db796966b373 // indirect
+	github.com/go-co-op/gocron/v2 v2.11.0 // indirect
 	github.com/go-pg/pg/v10 v10.10.0 // indirect
 	github.com/go-pg/zerochecker v0.2.0 // indirect
 	github.com/gofrs/uuid v4.0.0+incompatible // indirect
@@ -68,6 +71,7 @@ require (
 	github.com/imdario/mergo v0.3.8 // indirect
 	github.com/inconshreveable/mousetrap v1.0.0 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
+	github.com/jonboulle/clockwork v0.4.0 // indirect
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 // indirect
 	github.com/kevinburke/go-types v0.0.0-20210723172823-2deba1f80ba7 // indirect
 	github.com/kevinburke/rest v0.0.0-20210506044642-5611499aa33c // indirect
@@ -89,6 +93,7 @@ require (
 	github.com/petermattis/goid v0.0.0-20180202154549-b0b1615b78e5 // indirect
 	github.com/philhofer/fwd v1.1.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/robinjoseph08/go-pg-migrations/v3 v3.0.0 // indirect
 	github.com/russross/blackfriday/v2 v2.0.1 // indirect
 	github.com/sendgrid/rest v2.6.4+incompatible // indirect
@@ -109,6 +114,7 @@ require (
 	github.com/ttacon/libphonenumber v1.2.1 // indirect
 	github.com/tyler-smith/go-bip39 v1.1.0 // indirect
 	github.com/unrolled/secure v1.0.8 // indirect
+	github.com/uptrace/bun v1.1.14 // indirect
 	github.com/urfave/cli v1.22.1 // indirect
 	github.com/vmihailenco/bufpool v0.1.11 // indirect
 	github.com/vmihailenco/msgpack/v5 v5.3.5 // indirect
