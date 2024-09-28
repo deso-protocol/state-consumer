@@ -511,6 +511,8 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 					PublicKeyBase58Check: lib.PkToString(postEntry.PosterPublicKey, params),
 					Metadata:             "ParentPosterPublicKeyBase58Check",
 				})
+				txnMeta.SubmitPostTxindexMetadata.RelatedPublicKeyBase58Check = lib.PkToString(
+					postEntry.PosterPublicKey, params)
 			}
 		}
 
@@ -544,6 +546,8 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 						PublicKeyBase58Check: lib.PkToString(repostPost.PosterPublicKey, params),
 						Metadata:             "RepostedPublicKeyBase58Check",
 					})
+					txnMeta.SubmitPostTxindexMetadata.RelatedPublicKeyBase58Check = lib.PkToString(
+						repostPost.PosterPublicKey, params)
 				}
 			}
 		}
