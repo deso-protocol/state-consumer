@@ -11,7 +11,7 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/btcsuite/btcd/btcec"
+	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/deso-protocol/backend/routes"
 	"github.com/deso-protocol/core/lib"
 	"github.com/golang/glog"
@@ -1333,7 +1333,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		validatorPublicKeyBase58Check := lib.PkToString(realTxMeta.ValidatorPublicKey.ToBytes(), params)
 
 		// Calculate TotalUnlockedAmountNanos.
-		totalUnlockedAmountNanos := uint256.NewInt()
+		totalUnlockedAmountNanos := uint256.NewInt(0)
 		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeUnlockStake)
 		var err error
 		for _, prevLockedStakeEntry := range utxoOp.PrevLockedStakeEntries {
@@ -1342,7 +1342,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 			)
 			if err != nil {
 				glog.Errorf("CreateUnlockStakeTxindexMetadata: error calculating TotalUnlockedAmountNanos: %v", err)
-				totalUnlockedAmountNanos = uint256.NewInt()
+				totalUnlockedAmountNanos = uint256.NewInt(0)
 				break
 			}
 		}
