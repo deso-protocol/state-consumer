@@ -14,8 +14,8 @@ import (
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/deso-protocol/backend/routes"
 	"github.com/deso-protocol/core/lib"
+	"github.com/deso-protocol/uint256"
 	"github.com/golang/glog"
-	"github.com/holiman/uint256"
 	"github.com/pkg/errors"
 	"github.com/uptrace/bun/extra/bunbig"
 )

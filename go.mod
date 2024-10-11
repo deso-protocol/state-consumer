@@ -12,9 +12,9 @@ require (
 	github.com/btcsuite/btcd/btcec/v2 v2.3.4
 	github.com/deso-protocol/backend v1.2.9
 	github.com/deso-protocol/core v1.2.9
+	github.com/deso-protocol/uint256 v1.0.0
 	github.com/golang/glog v1.2.2
 	github.com/google/uuid v1.6.0
-	github.com/holiman/uint256 v1.3.1
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.9.0
 	github.com/uptrace/bun/extra/bunbig v1.1.14
@@ -100,6 +100,7 @@ require (
 	github.com/hashicorp/go-secure-stdlib/strutil v0.1.2 // indirect
 	github.com/hashicorp/go-sockaddr v1.0.7 // indirect
 	github.com/hashicorp/hcl v1.0.1-vault-5 // indirect
+	github.com/holiman/uint256 v1.3.1 // indirect
 	github.com/huandu/xstrings v1.5.0 // indirect
 	github.com/imdario/mergo v0.3.16 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
@@ -195,7 +196,7 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20241007155032-5fefd90f89a9 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20241007155032-5fefd90f89a9 // indirect
 	google.golang.org/grpc v1.67.1 // indirect
-	google.golang.org/grpc/stats/opentelemetry v0.0.0-20241009235753-18a4eacc0618 // indirect
+	google.golang.org/grpc/stats/opentelemetry v0.0.0-20241010100425-b850ea533f74 // indirect
 	google.golang.org/protobuf v1.35.1 // indirect
 	gopkg.in/DataDog/dd-trace-go.v1 v1.68.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
