@@ -298,6 +298,19 @@ func UniqueEntries(entries []*lib.StateChangeEntry) []*lib.StateChangeEntry {
 	return uniqueEntries
 }
 
+// FilterCachedEntries takes a slice of entries and a map of cached entries, and returns a slice of entries that are not
+// in the cached entries map.
+func FilterCachedEntries(entries []*lib.StateChangeEntry, cachedEntries map[string]string) []*lib.StateChangeEntry {
+	filteredEntries := make([]*lib.StateChangeEntry, 0)
+
+	for _, entry := range entries {
+		if cachedEntry, exists := cachedEntries[string(entry.KeyBytes)]; !exists || cachedEntry != string(entry.EncoderBytes) {
+			filteredEntries = append(filteredEntries, entry)
+		}
+	}
+	return filteredEntries
+}
+
 // KeysToDelete takes a slice of state change entries and returns a slice of key bytes. This helper can be used by
 // the data handler to construct a slice of IDs to delete given a slice of StateChangeEntries.
 func KeysToDelete(entries []*lib.StateChangeEntry) [][]byte {
