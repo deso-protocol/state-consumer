@@ -1,9 +1,11 @@
 package consumer
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/deso-protocol/core/lib"
 	"github.com/golang/glog"
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/pkg/errors"
 	"math"
 	"time"
@@ -300,11 +302,11 @@ func UniqueEntries(entries []*lib.StateChangeEntry) []*lib.StateChangeEntry {
 
 // FilterCachedEntries takes a slice of entries and a map of cached entries, and returns a slice of entries that are not
 // in the cached entries map.
-func FilterCachedEntries(entries []*lib.StateChangeEntry, cachedEntries map[string]string) []*lib.StateChangeEntry {
+func FilterCachedEntries(entries []*lib.StateChangeEntry, cachedEntries *lru.Cache[string, []byte]) []*lib.StateChangeEntry {
 	filteredEntries := make([]*lib.StateChangeEntry, 0)
 
 	for _, entry := range entries {
-		if cachedEntry, exists := cachedEntries[string(entry.KeyBytes)]; !exists || cachedEntry != string(entry.EncoderBytes) {
+		if cachedEntry, exists := cachedEntries.Get(string(entry.KeyBytes)); !exists || !bytes.Equal(cachedEntry, entry.EncoderBytes) {
 			filteredEntries = append(filteredEntries, entry)
 		}
 	}
