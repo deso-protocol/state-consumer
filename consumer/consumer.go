@@ -269,7 +269,7 @@ func (consumer *StateSyncerConsumer) SyncCommittedEntry(stateChangeEntry *lib.St
 				return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error initiating transaction")
 			}
 		}
-		
+
 		if err := consumer.RevertMempoolEntries(); err != nil {
 			return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error reverting mempool entries")
 		}
