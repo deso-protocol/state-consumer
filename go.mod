@@ -15,7 +15,7 @@ require (
 	github.com/deso-protocol/uint256 v1.3.2
 	github.com/golang/glog v1.2.2
 	github.com/google/uuid v1.6.0
-	github.com/hashicorp/golang-lru/v2 v2.0.3
+	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.9.0
 	github.com/uptrace/bun/extra/bunbig v1.2.3
@@ -55,6 +55,7 @@ require (
 	github.com/btcsuite/btclog v0.0.0-20241017175713-3428138b75c7 // indirect
 	github.com/bwesterb/go-ristretto v1.2.3 // indirect
 	github.com/census-instrumentation/opencensus-proto v0.4.1 // indirect
+	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudflare/circl v1.5.0 // indirect
 	github.com/cncf/xds/go v0.0.0-20240905190251-b4127c9b8d78 // indirect
@@ -66,8 +67,8 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.3.0 // indirect
 	github.com/deso-protocol/go-deadlock v1.0.1 // indirect
 	github.com/deso-protocol/go-merkle-tree v1.0.0 // indirect
-	github.com/dgraph-io/badger/v4 v4.3.1 // indirect
-	github.com/dgraph-io/ristretto v1.0.0 // indirect
+	github.com/dgraph-io/badger/v3 v3.2103.5 // indirect
+	github.com/dgraph-io/ristretto v0.2.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/eapache/queue/v2 v2.0.0-20230407133247-75960ed334e4 // indirect
 	github.com/ebitengine/purego v0.8.0 // indirect
@@ -90,6 +91,7 @@ require (
 	github.com/golang-jwt/jwt/v4 v4.5.0 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
+	github.com/golang/snappy v0.0.5-0.20220116011046-fa5810519dcb // indirect
 	github.com/google/flatbuffers v24.3.25+incompatible // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/google/pprof v0.0.0-20241009165004-a3522334989c // indirect
@@ -111,7 +113,7 @@ require (
 	github.com/kevinburke/go-types v0.0.0-20240719050749-165e75e768f7 // indirect
 	github.com/kevinburke/rest v0.0.0-20240617045629-3ed0ad3487f0 // indirect
 	github.com/kevinburke/twilio-go v0.0.0-20240716172313-813590983ccc // indirect
-	github.com/klauspost/compress v1.17.11 // indirect
+	github.com/klauspost/compress v1.17.1 // indirect
 	github.com/kyokomi/emoji/v2 v2.2.13 // indirect
 	github.com/magiconair/properties v1.8.7 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
@@ -151,7 +153,7 @@ require (
 	github.com/spf13/cast v1.7.0 // indirect
 	github.com/spf13/cobra v1.8.1 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
-	github.com/spf13/viper v1.19.0 // indirect
+	github.com/spf13/viper v1.18.2 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/tinylib/msgp v1.2.2 // indirect
 	github.com/tmthrgd/go-hex v0.0.0-20190904060850-447a3041c3bc // indirect
