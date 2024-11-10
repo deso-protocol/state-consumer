@@ -329,6 +329,10 @@ type PostTransactionExtraMetadata struct {
 	RelatedPublicKeyBase58Check string
 }
 
+type FollowTransactionExtraMetadata struct {
+	FollowedPublicKeyBase58Check string
+}
+
 // A combined view of the existing txindex metadata struct and the additional metadata fields.
 type ConsumerTxIndexMetadata struct {
 	lib.DeSoEncoder
@@ -649,6 +653,10 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 			PublicKeyBase58Check: lib.PkToString(realTxMeta.FollowedPublicKey, params),
 			Metadata:             "FollowedPublicKeyBase58Check",
 		})
+
+		transactionExtraMetadata = &FollowTransactionExtraMetadata{
+			FollowedPublicKeyBase58Check: lib.PkToString(realTxMeta.FollowedPublicKey, params),
+		}
 	case lib.TxnTypePrivateMessage:
 		realTxMeta := txn.TxnMeta.(*lib.PrivateMessageMetadata)
 
