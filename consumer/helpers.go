@@ -330,7 +330,7 @@ type PostTransactionExtraMetadata struct {
 }
 
 type FollowTransactionExtraMetadata struct {
-	FollowedPublicKeyPublicKeyBase58Check string
+	FollowedPublicKeyBase58Check string
 }
 
 // A combined view of the existing txindex metadata struct and the additional metadata fields.
