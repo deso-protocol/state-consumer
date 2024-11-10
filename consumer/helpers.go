@@ -655,7 +655,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		})
 
 		transactionExtraMetadata = &FollowTransactionExtraMetadata{
-			FollowedPublicKeyPublicKeyBase58Check: lib.PkToString(realTxMeta.FollowedPublicKey, params),
+			FollowedPublicKeyBase58Check: lib.PkToString(realTxMeta.FollowedPublicKey, params),
 		}
 	case lib.TxnTypePrivateMessage:
 		realTxMeta := txn.TxnMeta.(*lib.PrivateMessageMetadata)
