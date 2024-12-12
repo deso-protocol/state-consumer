@@ -11,10 +11,11 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/btcsuite/btcd/btcec"
+	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/deso-protocol/backend/routes"
 	"github.com/deso-protocol/core/lib"
+	"github.com/deso-protocol/uint256"
 	"github.com/golang/glog"
-	"github.com/holiman/uint256"
 	"github.com/pkg/errors"
 	"github.com/uptrace/bun/extra/bunbig"
 )
@@ -181,9 +182,52 @@ func DecodeDesoBodySchema(bodyBytes []byte) (*lib.DeSoBodySchema, error) {
 	return &body, nil
 }
 
-func ExtraDataBytesToString(extraData map[string][]byte) map[string]string {
+var extraDataCustomEncodings = map[string]func([]byte, *lib.DeSoParams, *lib.UtxoView) string{
+	lib.RepostedPostHash:  routes.DecodeHexString,
+	lib.IsQuotedRepostKey: routes.DecodeBoolString,
+	lib.IsFrozenKey:       routes.DecodeBoolString,
+
+	lib.USDCentsPerBitcoinKey:      routes.Decode64BitUintString,
+	lib.MinNetworkFeeNanosPerKBKey: routes.Decode64BitUintString,
+	lib.CreateProfileFeeNanosKey:   routes.Decode64BitUintString,
+	lib.CreateNFTFeeNanosKey:       routes.Decode64BitUintString,
+	lib.MaxCopiesPerNFTKey:         routes.Decode64BitUintString,
+
+	lib.ForbiddenBlockSignaturePubKeyKey: routes.DecodePkToString,
+
+	lib.DiamondLevelKey:    routes.Decode64BitIntString,
+	lib.DiamondPostHashKey: routes.DecodeHexString,
+
+	lib.DerivedPublicKey: routes.DecodePkToString,
+
+	lib.MessagingPublicKey:             routes.DecodePkToString,
+	lib.SenderMessagingPublicKey:       routes.DecodePkToString,
+	lib.SenderMessagingGroupKeyName:    routes.DecodeString,
+	lib.RecipientMessagingPublicKey:    routes.DecodePkToString,
+	lib.RecipientMessagingGroupKeyName: routes.DecodeString,
+
+	lib.BuyNowPriceKey: routes.Decode64BitUintString,
+
+	lib.DESORoyaltiesMapKey:          routes.DecodePubKeyToUint64MapString,
+	lib.CoinRoyaltiesMapKey:          routes.DecodePubKeyToUint64MapString,
+	lib.TokenTradingFeesByPkidMapKey: routes.DecodePubKeyToUint64MapString,
+
+	lib.MessagesVersionString: routes.Decode64BitUintString,
+
+	lib.NodeSourceMapKey: routes.Decode64BitUintString,
+
+	lib.DerivedKeyMemoKey: routes.DecodeDerivedKeyMemo,
+
+	lib.TransactionSpendingLimitKey: routes.DecodeString, // This differs from backend since UtxoView is nil.
+}
+
+func ExtraDataBytesToString(extraData map[string][]byte, params *lib.DeSoParams) map[string]string {
 	newMap := make(map[string]string)
 	for key, value := range extraData {
+		if encoderFunc, exists := extraDataCustomEncodings[key]; exists {
+			newMap[key] = encoderFunc(value, params, nil)
+			continue
+		}
 		newMap[key] = string(value)
 	}
 	return newMap
@@ -276,10 +320,62 @@ func getDisconnectOperationTypeForPrevEntry(prevEntry lib.DeSoEncoder) lib.State
 	}
 }
 
+// TransactionExtraMetadata tracks additional metadata for a transaction that isn't stored in txindex.
+type TransactionExtraMetadata interface{}
+
+// Additional fields needed for SubmitPost transactions.
+type PostTransactionExtraMetadata struct {
+	PosterPublicKeyBase58Check  string
+	RelatedPublicKeyBase58Check string
+}
+
+type FollowTransactionExtraMetadata struct {
+	FollowedPublicKeyBase58Check string
+}
+
+// A combined view of the existing txindex metadata struct and the additional metadata fields.
+type ConsumerTxIndexMetadata struct {
+	lib.DeSoEncoder
+	TransactionExtraMetadata
+}
+
+// Combine the JSON data from the DeSoEncoder and the TransactionExtraMetadata into a single JSON object.
+func (c ConsumerTxIndexMetadata) MarshalJSON() ([]byte, error) {
+	// Create temporary maps to hold each interface's JSON data
+	encoderData, err := json.Marshal(c.DeSoEncoder)
+	if err != nil {
+		return nil, err
+	}
+
+	metadataData, err := json.Marshal(c.TransactionExtraMetadata)
+	if err != nil {
+		return nil, err
+	}
+
+	// Unmarshal the JSON data into separate maps
+	var encoderMap map[string]interface{}
+	var metadataMap map[string]interface{}
+	if err := json.Unmarshal(encoderData, &encoderMap); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(metadataData, &metadataMap); err != nil {
+		return nil, err
+	}
+
+	// Combine both maps
+	for k, v := range metadataMap {
+		encoderMap[k] = v
+	}
+
+	// Marshal the combined map back into JSON
+	return json.Marshal(encoderMap)
+}
+
 func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params *lib.DeSoParams,
-	fees uint64, txnIndexInBlock uint64, utxoOps []*lib.UtxoOperation) (*lib.TransactionMetadata, error) {
+	fees uint64, txnIndexInBlock uint64, utxoOps []*lib.UtxoOperation) (*lib.TransactionMetadata, *TransactionExtraMetadata, error) {
 
 	var err error
+	var transactionExtraMetadata TransactionExtraMetadata
 	txnMeta := &lib.TransactionMetadata{
 		TxnIndexInBlock: txnIndexInBlock,
 		TxnType:         txn.TxnMeta.GetTxnType().String(),
@@ -325,12 +421,12 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 
 		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeCreatorCoin)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing creator coin utxo op error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing creator coin utxo op error: %v", txn.Hash().String())
 		}
 
 		stateChangeMetadata, ok := utxoOp.StateChangeMetadata.(*lib.CreatorCoinStateChangeMetadata)
 		if !ok {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing creator coin state change metadata error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing creator coin state change metadata error: %v", txn.Hash().String())
 		}
 
 		// Rosetta needs to know the change in DESOLockedNanos so it can model the change in
@@ -372,12 +468,12 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		realTxMeta := txn.TxnMeta.(*lib.CreatorCoinTransferMetadataa)
 		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeCreatorCoinTransfer)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing cc transfer utxo op error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing cc transfer utxo op error: %v", txn.Hash().String())
 		}
 
 		stateChangeMetadata, ok := utxoOp.StateChangeMetadata.(*lib.CCTransferStateChangeMetadata)
 		if !ok {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing cc transfer state change metadata error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing cc transfer state change metadata error: %v", txn.Hash().String())
 		}
 
 		txnMeta.CreatorCoinTransferTxindexMetadata = &lib.CreatorCoinTransferTxindexMetadata{
@@ -423,14 +519,15 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		})
 	case lib.TxnTypeSubmitPost:
 		realTxMeta := txn.TxnMeta.(*lib.SubmitPostMetadata)
+
 		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeSubmitPost)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing submit post utxo op error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing submit post utxo op error: %v", txn.Hash().String())
 		}
 
 		stateChangeMetadata, ok := utxoOp.StateChangeMetadata.(*lib.SubmitPostStateChangeMetadata)
 		if !ok {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing submit post state change metadata error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing submit post state change metadata error: %v", txn.Hash().String())
 		}
 
 		txnMeta.SubmitPostTxindexMetadata = &lib.SubmitPostTxindexMetadata{}
@@ -466,6 +563,9 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 					PublicKeyBase58Check: lib.PkToString(postEntry.PosterPublicKey, params),
 					Metadata:             "ParentPosterPublicKeyBase58Check",
 				})
+				transactionExtraMetadata = &PostTransactionExtraMetadata{
+					PosterPublicKeyBase58Check: lib.PkToString(postEntry.PosterPublicKey, params),
+				}
 			}
 		}
 
@@ -499,6 +599,9 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 						PublicKeyBase58Check: lib.PkToString(repostPost.PosterPublicKey, params),
 						Metadata:             "RepostedPublicKeyBase58Check",
 					})
+					transactionExtraMetadata = &PostTransactionExtraMetadata{
+						RelatedPublicKeyBase58Check: lib.PkToString(repostPost.PosterPublicKey, params),
+					}
 				}
 			}
 		}
@@ -507,12 +610,12 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 
 		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeLike)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing like utxo op error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing like utxo op error: %v", txn.Hash().String())
 		}
 
 		stateChangeMetadata, ok := utxoOp.StateChangeMetadata.(*lib.LikeStateChangeMetadata)
 		if !ok {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing like state change metadata error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing like state change metadata error: %v", txn.Hash().String())
 		}
 
 		txnMeta.LikeTxindexMetadata = &lib.LikeTxindexMetadata{
@@ -550,6 +653,10 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 			PublicKeyBase58Check: lib.PkToString(realTxMeta.FollowedPublicKey, params),
 			Metadata:             "FollowedPublicKeyBase58Check",
 		})
+
+		transactionExtraMetadata = &FollowTransactionExtraMetadata{
+			FollowedPublicKeyBase58Check: lib.PkToString(realTxMeta.FollowedPublicKey, params),
+		}
 	case lib.TxnTypePrivateMessage:
 		realTxMeta := txn.TxnMeta.(*lib.PrivateMessageMetadata)
 
@@ -567,12 +674,12 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 
 		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeSwapIdentity)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing swap identity utxo op error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing swap identity utxo op error: %v", txn.Hash().String())
 		}
 
 		stateChangeMetadata, ok := utxoOp.StateChangeMetadata.(*lib.SwapIdentityStateChangeMetadata)
 		if !ok {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing swap identity state change metadata error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing swap identity state change metadata error: %v", txn.Hash().String())
 		}
 
 		// Rosetta needs to know the current locked deso in each profile so it can model the swap of
@@ -614,7 +721,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 
 		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeNFTBid)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing nft bid utxo op error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing nft bid utxo op error: %v", txn.Hash().String())
 		}
 		var nftRoyaltiesMetadata lib.NFTRoyaltiesMetadata
 		var ownerPublicKeyBase58Check string
@@ -623,7 +730,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		if realTxMeta.SerialNumber != 0 {
 			stateChangeMetadata, ok := utxoOp.StateChangeMetadata.(*lib.NFTBidStateChangeMetadata)
 			if !ok {
-				return nil, fmt.Errorf("ComputeTransactionMetadata: missing nft bid state change metadata error: %v", txn.Hash().String())
+				return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing nft bid state change metadata error: %v", txn.Hash().String())
 			}
 			postEntry := stateChangeMetadata.PostEntry
 
@@ -697,11 +804,11 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 
 		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeAcceptNFTBid)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing accept bid utxo op error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing accept bid utxo op error: %v", txn.Hash().String())
 		}
 		stateChangeMetadata, ok := utxoOp.StateChangeMetadata.(*lib.AcceptNFTBidStateChangeMetadata)
 		if !ok {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing accept bid state change metadata error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing accept bid state change metadata error: %v", txn.Hash().String())
 		}
 
 		creatorPublicKeyBase58Check := lib.PkToString(utxoOp.PrevPostEntry.PosterPublicKey, params)
@@ -759,11 +866,11 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 
 		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeCreateNFT)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing create nft utxo op error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing create nft utxo op error: %v", txn.Hash().String())
 		}
 		stateChangeMetadata, ok := utxoOp.StateChangeMetadata.(*lib.CreateNFTStateChangeMetadata)
 		if !ok {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing create nft state change metadata error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing create nft state change metadata error: %v", txn.Hash().String())
 		}
 
 		additionalDESORoyaltiesMap := stateChangeMetadata.AdditionalDESORoyaltiesMap
@@ -792,11 +899,11 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 
 		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeUpdateNFT)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing update nft utxo op error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing update nft utxo op error: %v", txn.Hash().String())
 		}
 		stateChangeMetadata, ok := utxoOp.StateChangeMetadata.(*lib.UpdateNFTStateChangeMetadata)
 		if !ok {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing update nft state change metadata error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing update nft state change metadata error: %v", txn.Hash().String())
 		}
 
 		postEntry := stateChangeMetadata.NFTPostEntry
@@ -876,11 +983,11 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 
 		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeDAOCoin)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing dao coin utxo op error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing dao coin utxo op error: %v", txn.Hash().String())
 		}
 		stateChangeMetadata, ok := utxoOp.StateChangeMetadata.(*lib.DAOCoinStateChangeMetadata)
 		if !ok {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing dao coin state change metadata error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing dao coin state change metadata error: %v", txn.Hash().String())
 		}
 
 		creatorProfileEntry := stateChangeMetadata.CreatorProfileEntry
@@ -919,11 +1026,11 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 
 		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeDAOCoinTransfer)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing dao coin transfer utxo op error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing dao coin transfer utxo op error: %v", txn.Hash().String())
 		}
 		stateChangeMetadata, ok := utxoOp.StateChangeMetadata.(*lib.DAOCoinTransferStateChangeMetadata)
 		if !ok {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing dao coin transfer state change metadata error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing dao coin transfer state change metadata error: %v", txn.Hash().String())
 		}
 
 		creatorProfileEntry := stateChangeMetadata.CreatorProfileEntry
@@ -941,12 +1048,12 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 
 		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeDAOCoinLimitOrder)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing dao coin limit order utxo op error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing dao coin limit order utxo op error: %v", txn.Hash().String())
 		}
 
 		stateChangeMetadata, ok := utxoOp.StateChangeMetadata.(*lib.DAOCoinLimitOrderStateChangeMetadata)
 		if !ok {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing dao coin limit order state change metadata error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing dao coin limit order state change metadata error: %v", txn.Hash().String())
 		}
 
 		// We only update the mempool if the transactor submitted a new
@@ -1021,11 +1128,11 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		realTxMeta := txn.TxnMeta.(*lib.DeleteUserAssociationMetadata)
 		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeDeleteUserAssociation)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing delete user association utxo op error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing delete user association utxo op error: %v", txn.Hash().String())
 		}
 		stateChangeMetadata, ok := utxoOp.StateChangeMetadata.(*lib.DeleteUserAssociationStateChangeMetadata)
 		if !ok {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing delete user association state change metadata error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing delete user association state change metadata error: %v", txn.Hash().String())
 		}
 
 		prevAssociationEntry := &lib.UserAssociationEntry{}
@@ -1054,11 +1161,11 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		realTxMeta := txn.TxnMeta.(*lib.CreatePostAssociationMetadata)
 		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeCreatePostAssociation)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing create post association utxo op error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing create post association utxo op error: %v", txn.Hash().String())
 		}
 		stateChangeMetadata, ok := utxoOp.StateChangeMetadata.(*lib.CreatePostAssociationStateChangeMetadata)
 		if !ok {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing create post association state change metadata error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing create post association state change metadata error: %v", txn.Hash().String())
 		}
 
 		appPublicKeyBase58Check := lib.PkToString(realTxMeta.AppPublicKey.ToBytes(), params)
@@ -1072,6 +1179,8 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 
 		postEntry := stateChangeMetadata.PostEntry
 
+		transactionExtraMetadata = &PostTransactionExtraMetadata{PosterPublicKeyBase58Check: lib.PkToString(postEntry.PosterPublicKey, params)}
+
 		txnMeta.AffectedPublicKeys = append(txnMeta.AffectedPublicKeys, &lib.AffectedPublicKey{
 			PublicKeyBase58Check: lib.PkToString(postEntry.PosterPublicKey, params),
 			Metadata:             "AssociationTargetPostCreatorPublicKeyBase58Check",
@@ -1081,11 +1190,11 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		realTxMeta := txn.TxnMeta.(*lib.DeletePostAssociationMetadata)
 		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeDeletePostAssociation)
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing delete post association utxo op error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing delete post association utxo op error: %v", txn.Hash().String())
 		}
 		stateChangeMetadata, ok := utxoOp.StateChangeMetadata.(*lib.DeletePostAssociationStateChangeMetadata)
 		if !ok {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing delete post association state change metadata error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing delete post association state change metadata error: %v", txn.Hash().String())
 		}
 
 		prevAssociationEntry := &lib.PostAssociationEntry{}
@@ -1191,12 +1300,12 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeUnregisterAsValidator)
 
 		if utxoOp == nil || utxoOp.StateChangeMetadata == nil {
-			return nil, fmt.Errorf("ComputeTransactionMetadata: missing dao coin utxo op error: %v", txn.Hash().String())
+			return nil, nil, fmt.Errorf("ComputeTransactionMetadata: missing dao coin utxo op error: %v", txn.Hash().String())
 
 		}
 		stateChangeMetadata, ok := utxoOp.StateChangeMetadata.(*lib.UnregisterAsValidatorStateChangeMetadata)
 		if !ok {
-			return nil, fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"ComputeTransactionMetadata: missing unregister as validator state change metadata error: %v",
 				txn.Hash().String())
 		}
@@ -1288,7 +1397,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		validatorPublicKeyBase58Check := lib.PkToString(realTxMeta.ValidatorPublicKey.ToBytes(), params)
 
 		// Calculate TotalUnlockedAmountNanos.
-		totalUnlockedAmountNanos := uint256.NewInt()
+		totalUnlockedAmountNanos := uint256.NewInt(0)
 		utxoOp := GetUtxoOpByOperationType(utxoOps, lib.OperationTypeUnlockStake)
 		var err error
 		for _, prevLockedStakeEntry := range utxoOp.PrevLockedStakeEntries {
@@ -1297,7 +1406,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 			)
 			if err != nil {
 				glog.Errorf("CreateUnlockStakeTxindexMetadata: error calculating TotalUnlockedAmountNanos: %v", err)
-				totalUnlockedAmountNanos = uint256.NewInt()
+				totalUnlockedAmountNanos = uint256.NewInt(0)
 				break
 			}
 		}
@@ -1375,16 +1484,16 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 		}
 		// This should never happen.
 		if atomicWrapperUtxoOp == nil {
-			return nil, errors.New("ComputeTransactionMetadata: Could not find utxo op for atomic txn wrapper")
+			return nil, nil, errors.New("ComputeTransactionMetadata: Could not find utxo op for atomic txn wrapper")
 		}
 		innerUtxoOps := atomicWrapperUtxoOp.AtomicTxnsInnerUtxoOps
 		if len(innerUtxoOps) != len(realTxMeta.Txns) {
-			return nil, errors.New("ComputeTransactionMetadata: Number of inner utxo ops does not match number of inner txns")
+			return nil, nil, errors.New("ComputeTransactionMetadata: Number of inner utxo ops does not match number of inner txns")
 		}
 		for ii, innerTxn := range realTxMeta.Txns {
 			// Compute the transaction metadata for each inner transaction.
 			var innerTxnsTxnMetadata *lib.TransactionMetadata
-			innerTxnsTxnMetadata, err = ComputeTransactionMetadata(
+			innerTxnsTxnMetadata, _, err = ComputeTransactionMetadata(
 				innerTxn,
 				blockHashHex,
 				params,
@@ -1393,7 +1502,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 				innerUtxoOps[ii],
 			)
 			if err != nil {
-				return nil, errors.Wrapf(err, "ComputeTransactionMetadata: Error computing inner transaction metadata")
+				return nil, nil, errors.Wrapf(err, "ComputeTransactionMetadata: Error computing inner transaction metadata")
 			}
 			txnMeta.AtomicTxnsWrapperTxindexMetadata.InnerTxnsTransactionMetadata = append(
 				txnMeta.AtomicTxnsWrapperTxindexMetadata.InnerTxnsTransactionMetadata, innerTxnsTxnMetadata)
@@ -1421,7 +1530,7 @@ func ComputeTransactionMetadata(txn *lib.MsgDeSoTxn, blockHashHex string, params
 			})
 		}
 	}
-	return txnMeta, nil
+	return txnMeta, &transactionExtraMetadata, nil
 }
 
 func GetUtxoOpByOperationType(utxoOps []*lib.UtxoOperation, operationType lib.OperationType) *lib.UtxoOperation {

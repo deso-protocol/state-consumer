@@ -3,6 +3,9 @@ package tests
 import (
 	"context"
 	"fmt"
+	"os"
+	"testing"
+
 	"github.com/deso-protocol/backend/config"
 	"github.com/deso-protocol/backend/routes"
 	coreCmd "github.com/deso-protocol/core/cmd"
@@ -14,7 +17,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 const (
@@ -120,7 +122,7 @@ func CleanupConsumerTestEnvironment(apiServer *routes.APIServer, nodeServer *lib
 	nodeServer.Stop()
 }
 
-func SetupConsumerTestEnvironment(t *testing.T, testUserCount int, entropyStr string, params *lib.DeSoParams) (*pdh_tests.TestConfig, *TestHandler, *routes.APIServer, *lib.Server, *consumer.StateSyncerConsumer) {
+func SetupConsumerTestEnvironment(t *testing.T, testUserCount int, entropyStr string, params *lib.DeSoParams) (*pdh_tests.TestConfig, *TestHandler, *routes.APIServer, *lib.Server, *consumer.StateSyncerConsumer, func()) {
 	pdh_tests.SetupFlags("../.env")
 	starterAccountSeed := viper.GetString("TEST_STARTER_DESO_SEED")
 	starterUser, _, err := pdh_tests.CreateTestUser(starterAccountSeed, "", 0, params, nil)
@@ -147,18 +149,41 @@ func SetupConsumerTestEnvironment(t *testing.T, testUserCount int, entropyStr st
 	stateSyncerConsumer := &consumer.StateSyncerConsumer{}
 
 	// Initialize and run the state syncer consumer in a non-blocking thread.
+	// Create a context with cancel to control the goroutine
+	_, cancel := context.WithCancel(context.Background())
+
+	// Start consumer in goroutine
 	go func() {
 		err := stateSyncerConsumer.InitializeAndRun(
 			stateChangeDir,
 			consumerProgressDir,
 			500000,
 			1,
+			true,
 			testHandler,
 		)
-		require.NoError(t, err)
+		if err != nil && !errors.Is(err, context.Canceled) {
+			require.NoError(t, err)
+		}
 	}()
 
-	return testConfig, testHandler, apiServer, nodeServer, stateSyncerConsumer
+	// Create cleanup function to return
+	cleanupFunc := func() {
+		// Cancel context to stop goroutine
+		cancel()
+
+		// Delete state change directory
+		if err := os.RemoveAll(stateChangeDir); err != nil {
+			fmt.Printf("Error removing state change dir: %v\n", err)
+		}
+
+		// Delete consumer progress directory
+		if err := os.RemoveAll(consumerProgressDir); err != nil {
+			fmt.Printf("Error removing consumer progress dir: %v\n", err)
+		}
+	}
+
+	return testConfig, testHandler, apiServer, nodeServer, stateSyncerConsumer, cleanupFunc
 }
 
 // TODO: Make sure that state change dir gets cleaned up.
@@ -183,7 +208,7 @@ func newTestApiServer(t *testing.T, starterUser *pdh_tests.TestUser, apiPort uin
 	coreConfig.LogDirectory = ""
 	coreConfig.StateChangeDir = stateChangeDir
 	coreConfig.GlogV = 0
-	coreConfig.LogToStdErr = false
+	coreConfig.NoLogToStdErr = true
 
 	// Create a core node.
 	shutdownListener := make(chan struct{})

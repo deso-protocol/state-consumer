@@ -1,9 +1,11 @@
 package consumer
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/deso-protocol/core/lib"
 	"github.com/golang/glog"
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/pkg/errors"
 	"math"
 	"time"
@@ -296,6 +298,19 @@ func UniqueEntries(entries []*lib.StateChangeEntry) []*lib.StateChangeEntry {
 		}
 	}
 	return uniqueEntries
+}
+
+// FilterCachedEntries takes a slice of entries and a map of cached entries, and returns a slice of entries that are not
+// in the cached entries map.
+func FilterCachedEntries(entries []*lib.StateChangeEntry, cachedEntries *lru.Cache[string, []byte]) []*lib.StateChangeEntry {
+	filteredEntries := make([]*lib.StateChangeEntry, 0)
+
+	for _, entry := range entries {
+		if cachedEntry, exists := cachedEntries.Get(string(entry.KeyBytes)); !exists || !bytes.Equal(cachedEntry, entry.EncoderBytes) {
+			filteredEntries = append(filteredEntries, entry)
+		}
+	}
+	return filteredEntries
 }
 
 // KeysToDelete takes a slice of state change entries and returns a slice of key bytes. This helper can be used by
