@@ -1,5 +1,6 @@
 {
     "go.gopath": "",
     "go.testTimeout": "0",
+    "testing.maxNumberOfProblems": 10000,
     "editor.wordSeparators": "`~!@#$%^&*()-=+[{]}\\\\|;:'\\\",.<>/?"
 }

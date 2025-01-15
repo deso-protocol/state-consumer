@@ -1,7 +1,9 @@
 package tests
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"testing"
@@ -37,7 +39,13 @@ type TestHandler struct {
 	// It is used to determine which prefix to use for public keys.
 	Params *lib.DeSoParams
 
+	// ConsumerEventChan is a channel that receives StateConsumerEvents.
 	ConsumerEventChan chan *StateConsumerEvent
+
+	// ConsumedEvents is a list of all the events that have been consumed.
+	ConsumedEvents []*StateConsumerEvent
+
+	LastTransactionEvent TransactionEvent
 }
 
 func NewTestHandler(params *lib.DeSoParams) *TestHandler {
@@ -45,6 +53,9 @@ func NewTestHandler(params *lib.DeSoParams) *TestHandler {
 	th.Params = params
 
 	th.ConsumerEventChan = make(chan *StateConsumerEvent)
+	th.ConsumedEvents = []*StateConsumerEvent{}
+	th.LastTransactionEvent = TransactionEventUndefined
+
 	return th
 }
 
@@ -61,9 +72,10 @@ const (
 type TransactionEvent uint16
 
 const (
-	TransactionEventInitiate TransactionEvent = 0
-	TransactionEventCommit   TransactionEvent = 1
-	TransactionEventRollback TransactionEvent = 2
+	TransactionEventInitiate  TransactionEvent = 0
+	TransactionEventCommit    TransactionEvent = 1
+	TransactionEventRollback  TransactionEvent = 2
+	TransactionEventUndefined TransactionEvent = 3
 )
 
 type StateConsumerEvent struct {
@@ -296,16 +308,20 @@ func DecodeStateChangeEntryEncoders[EncoderType lib.DeSoEncoder](entry *lib.Stat
 
 // EntryScanResult is a struct that contains the results of a search for a transaction or entry in the ConsumerEventChan.
 type EntryScanResult struct {
-	EventsScanned  int
-	EntryBatch     []*lib.StateChangeEntry
-	ConsumedEvents []*StateConsumerEvent
-	IsMempool      bool
-	IsReverted     bool
-	EncoderType    lib.EncoderType
-	OperationType  lib.StateSyncerOperationType
-	Txn            *entries.PGTransactionEntry
-	RemainingTxns  []*entries.PGTransactionEntry
-	FlushId        uuid.UUID
+	EventsScanned           int
+	EntryBatch              []*lib.StateChangeEntry
+	ConsumedEvents          []*StateConsumerEvent
+	RemainingConsumedEvents []*StateConsumerEvent
+	IsMempool               bool
+	IsReverted              bool
+	EncoderType             lib.EncoderType
+	OperationType           lib.StateSyncerOperationType
+	Txn                     *entries.PGTransactionEntry
+	RemainingTxns           []*entries.PGTransactionEntry
+	FlushId                 uuid.UUID
+	TransactionCommits      int
+	TransactionInitiates    int
+	LastTransactionEvent    TransactionEvent
 }
 
 // GetNextBatch returns the next batch of entries from the ConsumerEventChan.
@@ -343,6 +359,7 @@ type ConsumerEventSearch struct {
 	targetIsReverted      *bool
 	targetTxnEvent        *TransactionEvent
 	exitWhenEmpty         bool
+	targetBadgerKeyBytes  *[]byte
 }
 
 // WaitForMatchingEntryBatch waits for an entry batch with the given encoder type, operation type, or flush id to appear in the ConsumerEventChan.
@@ -350,16 +367,35 @@ func (th *TestHandler) WaitForMatchingEntryBatch(searchCriteria *ConsumerEventSe
 	// Track the number of batches we've scanned.
 	eventsScanned := 0
 
+	// Track the # of transaction initiate and commit events that have occurred.
+	transactionCommits := 0
+	transactionInitiates := 0
+	lastTransactionEvent := th.LastTransactionEvent
+
 	// First check the preceding flush events to see if the event is there.
 	for ii, precedingEvent := range searchCriteria.precedingEvents {
+		if precedingEvent.EventType == ConsumerEventTransaction {
+			if precedingEvent.TransactionEvent == TransactionEventCommit {
+				transactionCommits += 1
+			} else if precedingEvent.TransactionEvent == TransactionEventInitiate {
+				transactionInitiates += 1
+			}
+			lastTransactionEvent = precedingEvent.TransactionEvent
+			th.LastTransactionEvent = lastTransactionEvent
+		}
 		eventsScanned += 1
 
 		if res, err := th.BatchMatchesSearch(precedingEvent, searchCriteria); err != nil {
 			return nil, errors.Wrapf(err, "WaitForMatchingEntryBatch: Problem checking for matching entry batch")
 		} else if res != nil {
 			res.EventsScanned = eventsScanned
+			res.TransactionCommits = transactionCommits
+			res.TransactionInitiates = transactionInitiates
+			res.LastTransactionEvent = lastTransactionEvent
+			// Return the events that were parsed.
+			res.ConsumedEvents = searchCriteria.precedingEvents[:ii+1]
 			// Return only the preceding events that weren't parsed.
-			res.ConsumedEvents = searchCriteria.precedingEvents[:ii]
+			res.RemainingConsumedEvents = searchCriteria.precedingEvents[ii+1:]
 			// Return the result and the remaining preceding flush events.
 			return res, nil
 		}
@@ -370,19 +406,36 @@ func (th *TestHandler) WaitForMatchingEntryBatch(searchCriteria *ConsumerEventSe
 	// Continue retrieving entries from the ConsumerEventChan until we find the transaction hash.
 	for consumerEvent := range th.ConsumerEventChan {
 		consumedFlushEvents = append(consumedFlushEvents, consumerEvent)
+		th.ConsumedEvents = append(th.ConsumedEvents, consumerEvent)
 		eventsScanned += 1
+
+		if consumerEvent.EventType == ConsumerEventTransaction {
+			if consumerEvent.TransactionEvent == TransactionEventCommit {
+				transactionCommits += 1
+			} else if consumerEvent.TransactionEvent == TransactionEventInitiate {
+				transactionInitiates += 1
+			}
+			lastTransactionEvent = consumerEvent.TransactionEvent
+			th.LastTransactionEvent = lastTransactionEvent
+		}
 
 		if res, err := th.BatchMatchesSearch(consumerEvent, searchCriteria); err != nil {
 			return nil, errors.Wrapf(err, "WaitForMatchingEntryBatch: Problem checking for matching entry batch")
 		} else if res != nil {
 			res.EventsScanned = eventsScanned
 			res.ConsumedEvents = consumedFlushEvents
+			res.TransactionCommits = transactionCommits
+			res.TransactionInitiates = transactionInitiates
+			res.LastTransactionEvent = lastTransactionEvent
 			return res, nil
 		}
 		if searchCriteria.exitWhenEmpty && len(th.ConsumerEventChan) == 0 {
 			return &EntryScanResult{
-				EventsScanned:  eventsScanned,
-				ConsumedEvents: consumedFlushEvents,
+				EventsScanned:        eventsScanned,
+				ConsumedEvents:       consumedFlushEvents,
+				TransactionCommits:   transactionCommits,
+				TransactionInitiates: transactionInitiates,
+				LastTransactionEvent: lastTransactionEvent,
 			}, fmt.Errorf("WaitForMatchingEntryBatch: Entry not found in entry batch")
 		}
 	}
@@ -423,13 +476,23 @@ func (th *TestHandler) BatchMatchesSearch(
 		}
 	}
 
+	badgerKeyMatch := true
+	if searchCriteria.targetBadgerKeyBytes != nil {
+		badgerKeyMatch, err = th.BadgerKeyInEntryBatch(*searchCriteria.targetBadgerKeyBytes, nextEntryBatch)
+		if err != nil {
+			return nil, errors.Wrapf(err, "BatchMatchesSearch: Problem checking for badger key in entry batch")
+		}
+	}
+
 	if EncoderTypeMatchesTargets(encoderType, searchCriteria.targetEncoderTypes) &&
 		(searchCriteria.targetConsumerEvent == nil || consumerEvent.EventType == *searchCriteria.targetConsumerEvent) &&
 		(searchCriteria.targetOpType == nil || operationType == *searchCriteria.targetOpType) &&
 		(searchCriteria.currentFlushId == nil || *searchCriteria.currentFlushId != flushId) &&
 		(searchCriteria.targetIsMempool == nil || *searchCriteria.targetIsMempool == isMempool) &&
 		(searchCriteria.targetIsReverted == nil || *searchCriteria.targetIsReverted == isReverted) &&
+		(badgerKeyMatch) &&
 		(transactionMatch) {
+
 		return &EntryScanResult{
 			EntryBatch:    nextEntryBatch,
 			IsMempool:     consumerEvent.IsMempool,
@@ -462,6 +525,16 @@ func (th *TestHandler) TransactionInEntryBatch(txnHash string, entryBatch []*lib
 
 	for _, txn := range txns {
 		if txn.TransactionHash == txnHash {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (th *TestHandler) BadgerKeyInEntryBatch(badgerKey []byte, entryBatch []*lib.StateChangeEntry) (bool, error) {
+	for _, entry := range entryBatch {
+		if bytes.Equal(entry.KeyBytes, badgerKey) {
+			fmt.Printf("Found badger key in entry batch: %s\n", hex.EncodeToString(badgerKey))
 			return true, nil
 		}
 	}
