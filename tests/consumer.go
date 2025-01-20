@@ -3,7 +3,6 @@ package tests
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"testing"
@@ -534,7 +533,6 @@ func (th *TestHandler) TransactionInEntryBatch(txnHash string, entryBatch []*lib
 func (th *TestHandler) BadgerKeyInEntryBatch(badgerKey []byte, entryBatch []*lib.StateChangeEntry) (bool, error) {
 	for _, entry := range entryBatch {
 		if bytes.Equal(entry.KeyBytes, badgerKey) {
-			fmt.Printf("Found badger key in entry batch: %s\n", hex.EncodeToString(badgerKey))
 			return true, nil
 		}
 	}

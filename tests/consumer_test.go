@@ -18,7 +18,6 @@ import (
 // VerifyTransactionStateChanges is a helper function that verifies the state changes for a transaction.
 // It waits for the transaction to be consumed by the state consumer, and then verifies that the
 // state changes for the entries related to the transaction are applied and reverted correctly.
-// TODO: When throwing out consumed events, add them to a slice. This should be returned from the function.
 func VerifyTransactionStateChanges(
 	t *testing.T,
 	testHandler *TestHandler,
@@ -40,19 +39,10 @@ func VerifyTransactionStateChanges(
 	})
 	require.NoError(t, err)
 	require.Equal(t, true, txnRes.IsMempool)
-	// require.Equal(t, TransactionEventInitiate, txnRes.LastTransactionEvent)
-	// TODO: Somehow pass the previous transaction state to the testHandler, so that if no transaction events occur, we stil know what the active transaction state is.
-	// if txnRes.TransactionInitiates > 0 {
-	// 	require.Equal(t, TransactionEventInitiate, txnRes.LastTransactionEvent)
-	// } else {
-	// 	require.Equal(t, TransactionEventUndefined, txnRes.LastTransactionEvent)
-	// }
 	requiredTxnInitiateCount := txnRes.TransactionInitiates
 	requiredTxnCommitCount := txnRes.TransactionCommits
 	// Add the events consumed from the transaction search to the previous consumed events.
 	consumedEvents := append(txnRes.ConsumedEvents, txnRes.RemainingConsumedEvents...)
-	fmt.Printf("Consumed event length: %d\n", len(consumedEvents))
-	fmt.Printf("All preceding events length: %d\n", len(previousConsumedEvents))
 	flushId := txnRes.FlushId
 	transactionConfirmed := false
 	flushesBeforeConfirmation := 0
@@ -60,7 +50,6 @@ func VerifyTransactionStateChanges(
 
 	// Keep waiting for balance entry operations until the transaction is confirmed.
 	for !transactionConfirmed {
-		fmt.Printf("Transaction not confirmed yet.\n")
 		// Should somehow confirm that the transaction and the balance entry operation occur in the same initiate/commit event.
 		// Wait for the next balance entry operation.
 		entryRes, err = testHandler.WaitForMatchingEntryBatch(&ConsumerEventSearch{
@@ -71,27 +60,8 @@ func VerifyTransactionStateChanges(
 			exitWhenEmpty:        false,
 		})
 
-		// fmt.Printf("Entry result: %+v\n", entryRes)
-
-		// fmt.Printf("Target badger key bytes: %s\n", hex.EncodeToString(*targetBadgerKeyBytes))
-
-		// for _, event := range entryRes.EntryBatch {
-		// 	fmt.Printf("Event key: %s\n", hex.EncodeToString(event.KeyBytes))
-		// }
-
 		require.NoError(t, err)
 
-		for _, entry := range entryRes.EntryBatch {
-			if bytes.Equal(entry.KeyBytes, *targetBadgerKeyBytes) {
-				// Decode the entry.
-				postAssocEntries, _, err := DecodeStateChangeEntries[*lib.PostAssociationEntry]([]*lib.StateChangeEntry{entry})
-				require.NoError(t, err)
-				require.Greater(t, len(postAssocEntries), 0)
-				fmt.Printf("Entry: %+v\n", &postAssocEntries[0])
-			}
-		}
-
-		// TODO: Delete this.
 		err = validateAppliedEntry(entryRes, targetBadgerKeyBytes)
 		require.NoError(t, err)
 
@@ -148,15 +118,8 @@ func VerifyTransactionStateChanges(
 			requiredTxnInitiateCount = 0
 			requiredTxnCommitCount = 0
 			require.Equal(t, encoderType, entryRes.EncoderType)
-			// TODO: Handle the revert case.
 			require.Equal(t, false, entryRes.IsReverted)
 			require.Equal(t, !transactionConfirmed, entryRes.IsMempool)
-
-			fmt.Printf("Target badger key bytes: %s\n", hex.EncodeToString(*targetBadgerKeyBytes))
-
-			for _, event := range entryRes.EntryBatch {
-				fmt.Printf("Event key: %s\n", hex.EncodeToString(event.KeyBytes))
-			}
 
 			// Validate the reverted entry.
 			err = validateRevertedEntry(entryRes, targetBadgerKeyBytes)
@@ -330,15 +293,11 @@ func TestConsumer(t *testing.T) {
 
 func TestConsumerBulk(t *testing.T) {
 
-	// TODO: Figure out how to parallelize this test.
-	// TODO: Figure out how to update our test handler to search for a specific entry. Maybe we search for a specific badger key? Can I even retrieve that from the transaction?
 	desoParams := &lib.DeSoTestnetParams
 	testConfig, testHandler, _, _, _, cleanupFunc := SetupConsumerTestEnvironment(t, 3, pdh_tests.RandString(10), desoParams)
 	defer cleanupFunc()
 
-	parallelism := 40
-
-	fmt.Printf("3\n")
+	parallelism := 60
 
 	nodeClient := testConfig.NodeClient
 	postUser := testConfig.TestUsers[0]
@@ -351,53 +310,45 @@ func TestConsumerBulk(t *testing.T) {
 		MinFeeRateNanosPerKB: pdh_tests.FeeRateNanosPerKB,
 	}
 
-	_, txnRes, err := nodeClient.SubmitPost(createPostReq, postUser.PrivateKey, false, true)
+	submitPostRes, txnRes, err := nodeClient.SubmitPost(createPostReq, postUser.PrivateKey, false, true)
 	require.NoError(t, err)
-	postHash := txnRes.TxnHashHex
+	postHash := txnRes.PostEntryResponse.PostHashHex
 
 	// Create a slice to store the random post associations.
 	randomPostAssocs := make([]string, parallelism)
 
 	txnHashes := make([]string, parallelism)
 
-	// wg := sync.WaitGroup{}
-
-	// wg.Add(parallelism)
+	fmt.Printf("Post hash: %s\n", txnRes.PostEntryResponse.PostHashHex)
+	fmt.Printf("Submit post response: %+v\n", submitPostRes)
 
 	// Generate the post associations.
 	for ii := 0; ii < parallelism; ii++ {
-		// go func(goroutineId int) {
-		// 	defer wg.Done()
 		randomPostAssoc := pdh_tests.RandString(10)
 
-		createPostAssocReq := &routes.CreatePostAssociationRequest{
-			TransactorPublicKeyBase58Check: postUser.PublicKeyBase58,
-			AppPublicKeyBase58Check:        postUser.PublicKeyBase58,
-			PostHashHex:                    postHash,
-			AssociationType:                randomPostAssoc,
-			AssociationValue:               randomPostAssoc,
-			MinFeeRateNanosPerKB:           pdh_tests.FeeRateNanosPerKB,
-		}
+		// Try to create the post association 10 times, in case it fails.
+		for jj := 0; jj < 10; jj++ {
+			createPostAssocReq := &routes.CreatePostAssociationRequest{
+				TransactorPublicKeyBase58Check: postUser.PublicKeyBase58,
+				AppPublicKeyBase58Check:        postUser.PublicKeyBase58,
+				PostHashHex:                    postHash,
+				AssociationType:                randomPostAssoc,
+				AssociationValue:               randomPostAssoc,
+				MinFeeRateNanosPerKB:           pdh_tests.FeeRateNanosPerKB,
+			}
 
-		_, txnRes, err = nodeClient.CreatePostAssociation(createPostAssocReq, postUser.PrivateKey, false, true)
+			_, txnRes, err = nodeClient.CreatePostAssociation(createPostAssocReq, postUser.PrivateKey, false, true)
+			if err == nil {
+				break
+			}
+		}
 		require.NoError(t, err)
 
 		txnHash := txnRes.TxnHashHex
 
-		txnHashBytes, err := hex.DecodeString(txnHash)
-		require.NoError(t, err)
-
-		fmt.Printf("txnHash: %s - target key bytes: %s - createPostAssocReq: %+v\n", txnHash, hex.EncodeToString(lib.DBKeyForPostAssociationByID(&lib.PostAssociationEntry{
-			AssociationID: lib.NewBlockHash(txnHashBytes),
-		})), createPostAssocReq)
 		txnHashes[ii] = txnHash
 		randomPostAssocs[ii] = randomPostAssoc
-		// }(ii)
 	}
-	// Wait for all the transactions to be submitted.
-	// wg.Wait()
-
-	// consumedEvents := make([]*StateConsumerEvent, 0)
 
 	// Verify each transaction in sequence.
 	for ii := 0; ii < parallelism; ii++ {
@@ -430,7 +381,6 @@ func TestConsumerBulk(t *testing.T) {
 				}
 				require.True(t, found)
 
-				// TODO: Move these to a generic function param.
 				postAssocEntries, postAssocAncestralEntries, err := DecodeStateChangeEntries[*lib.PostAssociationEntry]([]*lib.StateChangeEntry{stateChangeEntry})
 				if err != nil {
 					return err
@@ -440,9 +390,6 @@ func TestConsumerBulk(t *testing.T) {
 				require.Len(t, postAssocAncestralEntries, 1)
 				require.NotNil(t, postAssocEntries[0])
 				postAssocEntry := *postAssocEntries[0]
-
-				fmt.Printf("StateChangeEntry: %+v\n", *stateChangeEntry)
-				fmt.Printf("PostAssocEntry: %+v\n", *postAssocEntry)
 
 				require.Equal(t, postUser.PublicKeyBase58, consumer.PublicKeyBytesToBase58Check(postAssocEntry.AppPKID[:], desoParams))
 				require.Equal(t, postUser.PublicKeyBase58, consumer.PublicKeyBytesToBase58Check(postAssocEntry.TransactorPKID[:], desoParams))
@@ -472,7 +419,6 @@ func TestConsumerBulk(t *testing.T) {
 					require.Truef(t, found, "Failed to find state change entry in batch for target key bytes %s", hex.EncodeToString(*targetBadgerKeyBytes))
 				}
 
-				// TODO: Move these to a generic function param.
 				postAssocEntries, postAssocAncestralEntries, err := DecodeStateChangeEntries[*lib.PostAssociationEntry]([]*lib.StateChangeEntry{stateChangeEntry})
 				if err != nil {
 					return err
@@ -491,7 +437,6 @@ func TestConsumerBulk(t *testing.T) {
 				return nil
 			},
 		)
-		fmt.Printf("Validated txn %d\n", ii)
 	}
 
 }
@@ -845,7 +790,6 @@ func TestRemoveTransactionWithAncRecord(t *testing.T) {
 	require.Len(t, balanceAncestralEntries, 1)
 	require.NotNil(t, balanceEntries[0])
 	balanceEntry = *balanceEntries[0]
-	totalBalance = uint256.NewInt(0).Add(&mintDaoCoinReq.CoinsToMintNanos, &mintDaoCoinReq2.CoinsToMintNanos)
 	require.Equal(t, consumer.PublicKeyBytesToBase58Check(balanceEntry.HODLerPKID[:], desoParams), mintDaoCoinReq2.ProfilePublicKeyBase58CheckOrUsername)
 	require.Equal(t, consumer.PublicKeyBytesToBase58Check(balanceEntry.CreatorPKID[:], desoParams), mintDaoCoinReq2.UpdaterPublicKeyBase58Check)
 	require.True(t, balanceEntry.BalanceNanos.Eq(&mintDaoCoinReq.CoinsToMintNanos), "Balance: %s, Total balance: %s", balanceEntry.BalanceNanos.String(), mintDaoCoinReq.CoinsToMintNanos.String())
@@ -865,75 +809,4 @@ func TestRemoveTransactionWithAncRecord(t *testing.T) {
 	})
 	require.Error(t, err)
 
-	// TODO: Move the full test environment into the consumer repo.
-	// TODO: Test unconfirmed block, transaction, and block node logic.
-	// TODO: Figure out how to get this working in CI/CD.
-}
-
-func TestBlockEvents(t *testing.T) {
-	// Skip this until we figure out how to fix uncommitted txns.
-	// t.Skip()
-
-	desoParams := &lib.DeSoTestnetParams
-	testConfig, testHandler, _, _, _, cleanupFunc := SetupConsumerTestEnvironment(t, 3, pdh_tests.RandString(10), desoParams)
-	defer cleanupFunc()
-
-	nodeClient := testConfig.NodeClient
-	coinUser := testConfig.TestUsers[0]
-
-	// Mint some DAO coins for the coin user.
-	mintDaoCoinReq := &routes.DAOCoinRequest{
-		UpdaterPublicKeyBase58Check:           coinUser.PublicKeyBase58,
-		ProfilePublicKeyBase58CheckOrUsername: coinUser.PublicKeyBase58,
-		OperationType:                         routes.DAOCoinOperationStringMint,
-		CoinsToMintNanos:                      *uint256.NewInt(0).SetUint64(123212312324),
-		TransferRestrictionStatus:             routes.TransferRestrictionStatusStringUnrestricted,
-		MinFeeRateNanosPerKB:                  pdh_tests.FeeRateNanosPerKB,
-		TransactionFees:                       nil,
-	}
-
-	_, _, err := nodeClient.DAOCoins(mintDaoCoinReq, coinUser.PrivateKey, false, true)
-	require.NoError(t, err)
-
-	var entryRes *EntryScanResult
-
-	for ii := 0; ii < 250; ii++ {
-		entryRes, err = testHandler.WaitForMatchingEntryBatch(&ConsumerEventSearch{
-			targetConsumerEvent: &consumerEventBatch,
-			targetEncoderTypes:  []lib.EncoderType{lib.EncoderTypeBlock, lib.EncoderTypeBlockNode, lib.EncoderTypeTxn},
-			exitWhenEmpty:       false,
-		})
-		require.NoError(t, err)
-
-		if entryRes.EncoderType == lib.EncoderTypeBlock {
-			blocks, _, err := DecodeStateChangeEntries[*lib.MsgDeSoBlock](entryRes.EntryBatch)
-			require.NoError(t, err)
-			fmt.Printf("Block event: |%2d|%t|%t|%s\n", entryRes.OperationType, entryRes.IsMempool, entryRes.IsReverted, entryRes.FlushId.String())
-			fmt.Printf("Block entry: %+v\n", *blocks[0])
-			blockEntry := *blocks[0]
-			blockTxns, err := BlockToTransactionEntries(blockEntry, entryRes.EntryBatch[0].KeyBytes, desoParams)
-			require.NoError(t, err)
-			for _, txn := range blockTxns {
-				if txn.TxnType == uint16(lib.TxnTypeDAOCoin) {
-					fmt.Printf("Block entry txn: %+v\n", *txn)
-				}
-			}
-			//fmt.Printf("Block entry key bytes: %+v\n", balanceEntryRes.EntryBatch[0].KeyBytes)
-			//fmt.Printf("Block entry encoder bytes: %+v\n", balanceEntryRes.EntryBatch[0].EncoderBytes)
-		}
-		if entryRes.EncoderType == lib.EncoderTypeBlockNode {
-			blockNode, _, err := DecodeStateChangeEntries[*lib.BlockNode](entryRes.EntryBatch)
-			require.NoError(t, err)
-			fmt.Printf("Node event: |%2d|%t|%t|%s\n", entryRes.OperationType, entryRes.IsMempool, entryRes.IsReverted, entryRes.FlushId.String())
-			fmt.Printf("Node entry: %+v\n", *blockNode[0])
-			//fmt.Printf("Node entry key bytes: %+v\n", balanceEntryRes.EntryBatch[0].KeyBytes)
-			//fmt.Printf("Node entry encoder bytes: %+v\n", balanceEntryRes.EntryBatch[0].EncoderBytes)
-		}
-		if entryRes.EncoderType == lib.EncoderTypeTxn {
-			txn, _, err := DecodeStateChangeEntries[*lib.MsgDeSoTxn](entryRes.EntryBatch)
-			require.NoError(t, err)
-			fmt.Printf("Txn event: |%2d|%t|%t|%s\n", entryRes.OperationType, entryRes.IsMempool, entryRes.IsReverted, entryRes.FlushId.String())
-			fmt.Printf("Txn entry: %+v\n", *txn[0])
-		}
-	}
 }
