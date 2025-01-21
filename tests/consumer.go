@@ -16,7 +16,6 @@ import (
 	"github.com/deso-protocol/state-consumer/consumer"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
 )
 
@@ -135,7 +134,7 @@ func CleanupConsumerTestEnvironment(apiServer *routes.APIServer, nodeServer *lib
 
 func SetupConsumerTestEnvironment(t *testing.T, testUserCount int, entropyStr string, params *lib.DeSoParams) (*pdh_tests.TestConfig, *TestHandler, *routes.APIServer, *lib.Server, *consumer.StateSyncerConsumer, func()) {
 	pdh_tests.SetupFlags("../.env")
-	starterAccountSeed := viper.GetString("TEST_STARTER_DESO_SEED")
+	starterAccountSeed := "verb find card ship another until version devote guilt strong lemon six"
 	starterUser, _, err := pdh_tests.CreateTestUser(starterAccountSeed, "", 0, params, nil)
 
 	stateDirPostFix := pdh_tests.RandString(10)
