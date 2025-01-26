@@ -177,6 +177,7 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 		if err != nil {
 			return errors.Wrapf(err, "consumer.initialize: Error reverting mempool transactions")
 		}
+		lastEntrySyncedIdx = lastEntrySyncedIdx - 1
 	}
 
 	// Discover where we should start parsing the state change file.
