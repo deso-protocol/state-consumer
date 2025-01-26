@@ -177,7 +177,9 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 		if err != nil {
 			return errors.Wrapf(err, "consumer.initialize: Error reverting mempool transactions")
 		}
-		lastEntrySyncedIdx = lastEntrySyncedIdx + 1
+		fmt.Printf("Starting sync at index %v\n", lastEntrySyncedIdx)
+		lastEntrySyncedIdx = lastEntrySyncedIdx + 2
+		fmt.Printf("Changed to index %v\n", lastEntrySyncedIdx)
 	}
 
 	// Discover where we should start parsing the state change file.
@@ -185,6 +187,8 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 	if err != nil {
 		return errors.Wrapf(err, "consumer.intialize: Error retrieving file index for db operation")
 	}
+
+	fmt.Printf("Byte index is %v\n", stateChangeFileByteIndex)
 
 	// Set the batch count to the current batch on resume.
 	currentBatch := stateChangeFileByteIndex / batchBytes
