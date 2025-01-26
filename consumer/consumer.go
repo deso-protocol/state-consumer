@@ -182,6 +182,8 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 		//fmt.Printf("Changed to index %v\n", lastEntrySyncedIdx)
 	}
 
+	consumer.logFileIndexes(lastEntrySyncedIdx)
+
 	// Discover where we should start parsing the state change file.
 	stateChangeFileByteIndex, err := consumer.retrieveFileIndexForDbOperation(lastEntrySyncedIdx)
 	if err != nil {
@@ -703,7 +705,8 @@ func (consumer *StateSyncerConsumer) logFileIndexes(startEntryIndex uint64) (uin
 		fileBytesPosition := int64(startEntryIndex * 8)
 		bytesRead, err := consumer.StateChangeIndexFile.ReadAt(entryIndexBytes, fileBytesPosition)
 		if bytesRead == 0 {
-			return consumer.retrieveFileIndexForDbOperation(startEntryIndex - 1)
+			fmt.Printf("Read zero bytes, would be decrementing 1\n")
+			return 0, nil
 		} else if err != nil {
 			return 0, errors.Wrapf(err, "consumer.retrieveFileIndexForDbOperation: Error reading from state change index file")
 		}
@@ -721,6 +724,7 @@ func (consumer *StateSyncerConsumer) logFileIndexes(startEntryIndex uint64) (uin
 		fmt.Printf("Byte index at entry index %v: %v", startEntryIndex, dbIndex)
 		startEntryIndex = startEntryIndex + uint64(1)
 	}
+	return 0, nil
 }
 
 // peekNextStateChangeEntry reads the next entry from the state change file without advancing the file pointer.
