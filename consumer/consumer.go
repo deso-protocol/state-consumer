@@ -706,7 +706,7 @@ func (consumer *StateSyncerConsumer) logFileIndexes(startEntryIndex uint64) (uin
 		bytesRead, err := consumer.StateChangeIndexFile.ReadAt(entryIndexBytes, fileBytesPosition)
 		if bytesRead == 0 {
 			fmt.Printf("Read zero bytes, would be decrementing 1\n")
-			return 0, nil
+			continue
 		} else if err != nil {
 			return 0, errors.Wrapf(err, "consumer.retrieveFileIndexForDbOperation: Error reading from state change index file")
 		}
