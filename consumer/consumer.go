@@ -178,8 +178,8 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 			return errors.Wrapf(err, "consumer.initialize: Error reverting mempool transactions")
 		}
 		fmt.Printf("Starting sync at index %v\n", lastEntrySyncedIdx)
-		lastEntrySyncedIdx = lastEntrySyncedIdx + 3
-		fmt.Printf("Changed to index %v\n", lastEntrySyncedIdx)
+		//lastEntrySyncedIdx = lastEntrySyncedIdx
+		//fmt.Printf("Changed to index %v\n", lastEntrySyncedIdx)
 	}
 
 	// Discover where we should start parsing the state change file.
@@ -693,6 +693,34 @@ func (consumer *StateSyncerConsumer) retrieveFileIndexForDbOperation(startEntryI
 	// Use binary package to read a uint64 index from the byte slice representing the index of the db operation.
 	dbIndex := binary.LittleEndian.Uint64(entryIndexBytes)
 	return dbIndex, nil
+}
+
+func (consumer *StateSyncerConsumer) logFileIndexes(startEntryIndex uint64) (uint64, error) {
+	for ii := 0; ii < 1000; ii++ {
+		// Find the byte index in the state change file for the next db operation. Each entry byte index is represented
+		// in the index file as a uint64. This means the entry byte index exists at its consumer progress index * 8.
+		entryIndexBytes := make([]byte, 8)
+		fileBytesPosition := int64(startEntryIndex * 8)
+		bytesRead, err := consumer.StateChangeIndexFile.ReadAt(entryIndexBytes, fileBytesPosition)
+		if bytesRead == 0 {
+			return consumer.retrieveFileIndexForDbOperation(startEntryIndex - 1)
+		} else if err != nil {
+			return 0, errors.Wrapf(err, "consumer.retrieveFileIndexForDbOperation: Error reading from state change index file")
+		}
+		// If we read no bytes, we're at EOF.
+		if bytesRead == 0 {
+			return 0, fmt.Errorf("consumer.retrieveFileIndexForDbOperation: EOF reached")
+		}
+		// If we read a non uint64 number of bytes, something is wrong.
+		if bytesRead < 8 {
+			return 0, fmt.Errorf("consumer.retrieveFileIndexForDbOperation: Too few bytes read")
+		}
+
+		// Use binary package to read a uint64 index from the byte slice representing the index of the db operation.
+		dbIndex := binary.LittleEndian.Uint64(entryIndexBytes)
+		fmt.Printf("Byte index at entry index %v: %v", startEntryIndex, dbIndex)
+		startEntryIndex = startEntryIndex + uint64(1)
+	}
 }
 
 // peekNextStateChangeEntry reads the next entry from the state change file without advancing the file pointer.
