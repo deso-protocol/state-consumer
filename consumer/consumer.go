@@ -178,7 +178,7 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 			return errors.Wrapf(err, "consumer.initialize: Error reverting mempool transactions")
 		}
 		fmt.Printf("Starting sync at index %v\n", lastEntrySyncedIdx)
-		lastEntrySyncedIdx = lastEntrySyncedIdx + 2
+		lastEntrySyncedIdx = lastEntrySyncedIdx + 3
 		fmt.Printf("Changed to index %v\n", lastEntrySyncedIdx)
 	}
 
