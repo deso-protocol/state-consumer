@@ -271,19 +271,6 @@ func (consumer *StateSyncerConsumer) SyncCommittedEntry(stateChangeEntry *lib.St
 	revertTriggered := false
 	// If the entry is from a new flush (i.e. a new block), revert the current mempool entries before applying.
 	if stateChangeEntry.FlushId != consumer.CurrentConfirmedEntryFlushId {
-		// Commit old transaction and begin new one on new block mine.
-		// if consumer.ExecuteTransactions {
-		// 	// If the current confirmed entry flush id is nil, then there is no transaction to commit.
-		// 	if consumer.CurrentConfirmedEntryFlushId != uuid.Nil {
-		// 		if err := consumer.DataHandler.CommitTransaction(); err != nil {
-		// 			// If there's an error, wrap it with additional context and assign it to the named return variable.
-		// 			return errors.Wrapf(err, "consumer.processNewEntriesInFile: error committing transaction")
-		// 		}
-		// 	}
-		// 	if err := consumer.DataHandler.InitiateTransaction(); err != nil {
-		// 		return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error initiating transaction")
-		// 	}
-		// }
 
 		if err := consumer.RevertMempoolEntries(); err != nil {
 			return false, errors.Wrapf(err, "consumer.processNewEntriesInFile: Error reverting mempool entries")
@@ -517,7 +504,6 @@ func (consumer *StateSyncerConsumer) retrieveNextEntry(isMempool bool) (*lib.Sta
 	return stateChangeEntry, false, nil
 }
 
-// TODO: Figure out how to make execute txns work when we aren't hypersyncing (e.g. regtest)
 // detectAndHandleSyncEvent determines if the state change entry represents a sync event and emits it to the data handler.
 func (consumer *StateSyncerConsumer) detectAndHandleSyncEvent(stateChangeEntry *lib.StateChangeEntry) error {
 	// Determine if hypersync is beginning or ending.
@@ -573,9 +559,6 @@ func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() (err error) {
 				if err != nil {
 					return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error initiating transaction")
 				}
-				// TODO: If the committed entries triggered a revert, we should only commit the transaction once new mempool entries have been processed.
-				// TODO: How can we implement the above logic without losing the guarantee that the defer gives us?
-				// TODO: Maybe when syncing committed, after triggering a revert, we always do a mempool sync until we get some mempool entries. In this way, we don't need to change our transaction logic(?). (may still need to eliminate commit on every block)
 				defer func() {
 					// Call CommitTransaction and handle any potential error.
 					if commitErr := consumer.DataHandler.CommitTransaction(); commitErr != nil {
