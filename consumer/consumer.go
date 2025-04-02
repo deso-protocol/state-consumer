@@ -235,20 +235,17 @@ func (consumer *StateSyncerConsumer) processNewEntriesInFile(isMempool bool) (bo
 			break
 		}
 		entriesProcessed = true
+		var entryRevertTriggered bool
 		if !isMempool {
-			entryRevertTriggered, err := consumer.SyncCommittedEntry(stateChangeEntry)
-			// Update the overall revertTriggered flag if this entry triggered a revert
-			revertTriggered = revertTriggered || entryRevertTriggered
-			if err != nil {
-				return revertTriggered, entriesProcessed, errors.Wrapf(err, "consumer.processNewEntriesInFile: Error syncing committed entry")
-			}
+			entryRevertTriggered, err = consumer.SyncCommittedEntry(stateChangeEntry)	
 		} else {
-			entryRevertTriggered, err := consumer.SyncMempoolEntry(stateChangeEntry)
-			// Update the overall revertTriggered flag if this entry triggered a revert
-			revertTriggered = revertTriggered || entryRevertTriggered
-			if err != nil {
-				return revertTriggered, entriesProcessed, errors.Wrapf(err, "consumer.processNewEntriesInFile: Error syncing mempool entry")
-			}
+			entryRevertTriggered, err = consumer.SyncMempoolEntry(stateChangeEntry)
+		}
+
+		// Update the overall revertTriggered flag if this entry triggered a revert
+		revertTriggered = revertTriggered || entryRevertTriggered
+		if err != nil {
+			return revertTriggered, entriesProcessed, errors.Wrapf(err, "consumer.processNewEntriesInFile: Error syncing committed entry")
 		}
 	}
 
