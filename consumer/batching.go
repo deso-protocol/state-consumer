@@ -34,7 +34,7 @@ type BatchIndexInfo struct {
 // manageBatchedEntries calls the data handler to process a batch of entries, and calculates & logs the current batch progress.
 func (consumer *StateSyncerConsumer) manageBatchedEntries(batchedEntries []*lib.StateChangeEntry, isBatchMempool bool, entryCount uint64, batchCount uint64) {
 	// Call the data handler to process the batch. We do this with retries, in case the data handler fails.
-	err := consumer.callHandlerWithRetries(batchedEntries, 0)
+	err := consumer.callHandlerWithRetries(batchedEntries, 0, isBatchMempool)
 	if err != nil {
 		glog.Fatalf("consumer.manageBatchedEntries: %v", err)
 	}
@@ -131,9 +131,9 @@ func insertBatchIndexInOrder(batchIndexes []*BatchIndexInfo, newIndexInfo *Batch
 // callHandlerWithRetries calls the data handler to process a batch of entries. If the call fails, it will retry
 // with a smaller batch size until it succeeds or hits the max number of retries. These failures can happen due to
 // an overloaded database or a duplicate key error.
-func (consumer *StateSyncerConsumer) callHandlerWithRetries(batchedEntries []*lib.StateChangeEntry, retries int) error {
+func (consumer *StateSyncerConsumer) callHandlerWithRetries(batchedEntries []*lib.StateChangeEntry, retries int, isMempool bool) error {
 	// Attempt to process the batch.
-	if err := consumer.DataHandler.HandleEntryBatch(batchedEntries); err != nil {
+	if err := consumer.DataHandler.HandleEntryBatch(batchedEntries, isMempool); err != nil {
 		batchSize := len(batchedEntries)
 
 		// Make sure the batch isn't empty. This should never happen.
@@ -160,7 +160,7 @@ func (consumer *StateSyncerConsumer) callHandlerWithRetries(batchedEntries []*li
 			time.Sleep(waitTime)
 			// Set the operation type.
 			batchedEntries[0].OperationType = operationType
-			err = consumer.callHandlerWithRetries(batchedEntries, retries)
+			err = consumer.callHandlerWithRetries(batchedEntries, retries, isMempool)
 			if err != nil {
 				return errors.Wrapf(err, "consumer.callHandlerWithRetries: ")
 			}
@@ -173,12 +173,12 @@ func (consumer *StateSyncerConsumer) callHandlerWithRetries(batchedEntries []*li
 			batch1[0].OperationType = operationType
 			batch2[0].OperationType = operationType
 			time.Sleep(waitTime)
-			err = consumer.callHandlerWithRetries(batch1, retries)
+			err = consumer.callHandlerWithRetries(batch1, retries, isMempool)
 			if err != nil {
 				return errors.Wrapf(err, "consumer.callHandlerWithRetries: ")
 			}
 			time.Sleep(waitTime)
-			err = consumer.callHandlerWithRetries(batch2, retries)
+			err = consumer.callHandlerWithRetries(batch2, retries, isMempool)
 			if err != nil {
 				return errors.Wrapf(err, "consumer.callHandlerWithRetries: ")
 			}
@@ -208,7 +208,7 @@ func (consumer *StateSyncerConsumer) QueueBatch(batchedEntries []*lib.StateChang
 	} else {
 		// When not in hypersync, just call the data handler directly.
 		// We don't processNewEntriesInFile transactions concurrently, as transactions may be dependent on each other.
-		if err := consumer.callHandlerWithRetries(batchedEntries, 0); err != nil {
+		if err := consumer.callHandlerWithRetries(batchedEntries, 0, isBatchMempool); err != nil {
 			return errors.Wrapf(err, "consumer.QueueBatch: Error calling batch with retries")
 		}
 		// Skip incrementing the entry count and saving the consumer progress to file if this is a mempool entry.

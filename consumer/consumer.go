@@ -4,15 +4,16 @@ import (
 	"bufio"
 	"encoding/binary"
 	"fmt"
-	"github.com/deso-protocol/core/lib"
-	"github.com/golang/glog"
-	"github.com/google/uuid"
-	"github.com/pkg/errors"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/deso-protocol/core/lib"
+	"github.com/golang/glog"
+	"github.com/google/uuid"
+	"github.com/pkg/errors"
 )
 
 const (
@@ -80,6 +81,9 @@ type StateSyncerConsumer struct {
 
 	// Indexes to track asynchronous batch handling progress during hypersync.
 	BatchIndexes []*BatchIndexInfo
+
+	// Whether to stop the consumer.
+	StopConsumer bool
 }
 
 func (consumer *StateSyncerConsumer) InitializeAndRun(
@@ -92,7 +96,7 @@ func (consumer *StateSyncerConsumer) InitializeAndRun(
 	}
 	// If there are entries to read, processNewEntriesInFile an initial scan of the state change file.
 	if err == nil || err.Error() != "EOF" {
-		if err = consumer.processNewEntriesInFile(false); err != nil {
+		if _, _, err = consumer.processNewEntriesInFile(false); err != nil {
 			return errors.Wrapf(err, "consumer.InitializeAndRun: Error running consumer")
 		}
 	}
@@ -208,7 +212,10 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 }
 
 // processNewEntriesInFile reads the state change file and passes each entry to the data handler.
-func (consumer *StateSyncerConsumer) processNewEntriesInFile(isMempool bool) error {
+func (consumer *StateSyncerConsumer) processNewEntriesInFile(isMempool bool) (bool, bool, error) {
+	revertTriggered := false
+	entriesProcessed := false
+
 	fileEOF := false
 	// Read from the state change file until we reach the end.
 	for !fileEOF {
@@ -222,57 +229,50 @@ func (consumer *StateSyncerConsumer) processNewEntriesInFile(isMempool bool) err
 				glog.Errorf("consumer.processNewEntriesInFile: Error reading next mempool entry from file: %s", err.Error())
 				break
 			}
-			return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error reading next entry from file")
+			return revertTriggered, entriesProcessed, errors.Wrapf(err, "consumer.processNewEntriesInFile: Error reading next entry from file")
 		}
 		if fileEOF {
 			break
 		}
+		entriesProcessed = true
+		var entryRevertTriggered bool
 		if !isMempool {
-			if err = consumer.SyncCommittedEntry(stateChangeEntry); err != nil {
-				return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error syncing committed entry")
-			}
+			entryRevertTriggered, err = consumer.SyncCommittedEntry(stateChangeEntry)	
 		} else {
-			if err = consumer.SyncMempoolEntry(stateChangeEntry); err != nil {
-				return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error syncing mempool entry")
-			}
+			entryRevertTriggered, err = consumer.SyncMempoolEntry(stateChangeEntry)
+		}
+
+		// Update the overall revertTriggered flag if this entry triggered a revert
+		revertTriggered = revertTriggered || entryRevertTriggered
+		if err != nil {
+			return revertTriggered, entriesProcessed, errors.Wrapf(err, "consumer.processNewEntriesInFile: Error syncing committed entry")
 		}
 	}
 
 	// Once we've reached the file EOF, process any remaining batched entries and cleanup.
 	if err := consumer.cleanup(); err != nil {
-		return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error cleaning up")
+		return revertTriggered, entriesProcessed, errors.Wrapf(err, "consumer.processNewEntriesInFile: Error cleaning up")
 	}
 
 	// If we are syncing from the beginning, emit a sync end event.
 	if consumer.SyncingFromBeginning && !isMempool && !consumer.IsHypersyncing {
 		consumer.SyncingFromBeginning = false
 		if err := consumer.DataHandler.HandleSyncEvent(SyncEventComplete); err != nil {
-			return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error handling sync end event")
+			return revertTriggered, entriesProcessed, errors.Wrapf(err, "consumer.processNewEntriesInFile: Error handling sync end event")
 		}
 	}
-	return nil
+	return revertTriggered, entriesProcessed, nil
 }
 
-func (consumer *StateSyncerConsumer) SyncCommittedEntry(stateChangeEntry *lib.StateChangeEntry) error {
+func (consumer *StateSyncerConsumer) SyncCommittedEntry(stateChangeEntry *lib.StateChangeEntry) (bool, error) {
+	revertTriggered := false
 	// If the entry is from a new flush (i.e. a new block), revert the current mempool entries before applying.
 	if stateChangeEntry.FlushId != consumer.CurrentConfirmedEntryFlushId {
-		// Commit old transaction and begin new one on new block mine.
-		if consumer.ExecuteTransactions {
-			// If the current confirmed entry flush id is nil, then there is no transaction to commit.
-			if consumer.CurrentConfirmedEntryFlushId != uuid.Nil {
-				if err := consumer.DataHandler.CommitTransaction(); err != nil {
-					// If there's an error, wrap it with additional context and assign it to the named return variable.
-					return errors.Wrapf(err, "consumer.processNewEntriesInFile: error committing transaction")
-				}
-			}
-			if err := consumer.DataHandler.InitiateTransaction(); err != nil {
-				return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error initiating transaction")
-			}
-		}
 
 		if err := consumer.RevertMempoolEntries(); err != nil {
-			return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error reverting mempool entries")
+			return false, errors.Wrapf(err, "consumer.processNewEntriesInFile: Error reverting mempool entries")
 		}
+		revertTriggered = true
 		// Update the current block sync flush ID.
 		consumer.CurrentConfirmedEntryFlushId = stateChangeEntry.FlushId
 		if !consumer.IsHypersyncing {
@@ -282,27 +282,30 @@ func (consumer *StateSyncerConsumer) SyncCommittedEntry(stateChangeEntry *lib.St
 	}
 	// Detect if this entry represets a sync state change and emit
 	if err := consumer.detectAndHandleSyncEvent(stateChangeEntry); err != nil {
-		return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error detecting sync event")
+		return revertTriggered, errors.Wrapf(err, "consumer.processNewEntriesInFile: Error detecting sync event")
 	}
 	// Handle the state change entry.
 	if err := consumer.handleStateChangeEntry(stateChangeEntry, false); err != nil {
-		return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error handling state change entry")
+		return revertTriggered, errors.Wrapf(err, "consumer.processNewEntriesInFile: Error handling state change entry")
 	}
-	return nil
+	return revertTriggered, nil
 }
 
-func (consumer *StateSyncerConsumer) SyncMempoolEntry(stateChangeEntry *lib.StateChangeEntry) error {
+func (consumer *StateSyncerConsumer) SyncMempoolEntry(stateChangeEntry *lib.StateChangeEntry) (bool, error) {
+	revertTriggered := false
+
 	// If the entry is from a new flush (i.e. a new block), revert the current mempool entries before applying.
 	if stateChangeEntry.FlushId != consumer.CurrentMempoolEntryFlushId {
 		if err := consumer.RevertMempoolEntries(); err != nil {
-			return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error reverting mempool entries")
+			return false, errors.Wrapf(err, "consumer.processNewEntriesInFile: Error reverting mempool entries")
 		}
+		revertTriggered = true
 		consumer.CurrentMempoolEntryFlushId = stateChangeEntry.FlushId
 	}
 
 	// Handle the state change entry.
 	if err := consumer.handleStateChangeEntry(stateChangeEntry, true); err != nil {
-		return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error handling state change entry")
+		return false, errors.Wrapf(err, "consumer.processNewEntriesInFile: Error handling state change entry")
 	}
 
 	// Add this entry to the list of applied mempool entries.
@@ -310,7 +313,7 @@ func (consumer *StateSyncerConsumer) SyncMempoolEntry(stateChangeEntry *lib.Stat
 
 	// Add this entry to the file log of applied mempool entries.
 	consumer.saveMempoolProgressToFile(stateChangeEntry)
-	return nil
+	return revertTriggered, nil
 }
 
 func (consumer *StateSyncerConsumer) RevertMempoolEntry(stateChangeEntry *lib.StateChangeEntry) error {
@@ -325,6 +328,7 @@ func (consumer *StateSyncerConsumer) RevertMempoolEntry(stateChangeEntry *lib.St
 		// If the ancestral record exists, update the db record to that value.
 		revertEntry.OperationType = lib.DbOperationTypeUpsert
 		revertEntry.Encoder = revertEntry.AncestralRecord
+		revertEntry.EncoderBytes = revertEntry.AncestralRecordBytes
 	}
 
 	// Handle the reverted state change entry.
@@ -520,6 +524,7 @@ func (consumer *StateSyncerConsumer) detectAndHandleSyncEvent(stateChangeEntry *
 			return errors.Wrapf(err, "consumer.detectAndHandleSyncEvent: Error handling hypersync complete event")
 		}
 	} else if consumer.LastScannedIndex == 0 && stateChangeEntry.OperationType != lib.DbOperationTypeInsert {
+		consumer.ExecuteTransactions = true
 		if err := consumer.DataHandler.HandleSyncEvent(SyncEventHypersyncComplete); err != nil {
 			return errors.Wrapf(err, "consumer.detectAndHandleSyncEvent: Error handling hypersync complete event")
 		}
@@ -539,7 +544,7 @@ func (consumer *StateSyncerConsumer) detectAndHandleSyncEvent(stateChangeEntry *
 // watchFileAndScanOnWrite continually triggers a new processNewEntriesInFile of the consumer. If there are any new changes that have been
 // written, they will be captured by the processNewEntriesInFile, otherwise the processNewEntriesInFile will exit.
 func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() (err error) {
-	for {
+	for !consumer.StopConsumer {
 		err = func() error {
 			// Short sleep to prevent busy-waiting.
 			time.Sleep(25 * time.Millisecond)
@@ -560,22 +565,46 @@ func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() (err error) {
 				}()
 			}
 			// Process any new committed entries.
-			if err = consumer.processNewEntriesInFile(false); err != nil {
+			revertTriggered, _, err := consumer.processNewEntriesInFile(false)
+			if err != nil {
 				return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning committed entries")
 			}
 
 			// Process any new mempool entries
 			if consumer.SyncMempoolEntires {
-				if err = consumer.processNewEntriesInFile(true); err != nil {
-					return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning mempool entries")
+				// If a revert was triggered during the committed entries, and we are executing transactions,
+				// we need to process mempool entries UNTIL we see new entries get applied.
+				// This is to ensure that any entries that were reverted but not included in the new block are
+				// re-applied before the transaction is committed.
+				if revertTriggered && consumer.ExecuteTransactions {
+					for {
+						_, entriesProcessed, err := consumer.processNewEntriesInFile(true)
+						if err != nil {
+							return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning mempool entries")
+						}
+						// Break if we processed entries, since we've now synced the new mempool state
+						if entriesProcessed {
+							break
+						}
+						// Small sleep to prevent busy waiting
+						time.Sleep(25 * time.Millisecond)
+					}
+				} else {
+					// Just process once if no revert or not executing transactions
+					_, _, err := consumer.processNewEntriesInFile(true)
+					if err != nil {
+						return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error scanning mempool entries")
+					}
 				}
 			}
+
 			return nil
 		}()
 		if err != nil {
 			return errors.Wrapf(err, "consumer.watchFileAndScanOnWrite: Error processing new entries")
 		}
 	}
+	return nil
 }
 
 // waitForStateChangesFile blocks execution until the state changes file is created, and then assigns it to the consumer.
@@ -786,4 +815,8 @@ func (consumer *StateSyncerConsumer) cleanup() error {
 		return errors.Wrapf(err, "consumer.cleanup: Error executing final batch")
 	}
 	return nil
+}
+
+func (consumer *StateSyncerConsumer) Stop() {
+	consumer.StopConsumer = true
 }
