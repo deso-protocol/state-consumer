@@ -34,7 +34,7 @@ func CopyStruct(src interface{}, dst interface{}) error {
 	dstValue := reflect.ValueOf(dst).Elem()
 
 	if srcValue.Kind() != reflect.Struct || dstValue.Kind() != reflect.Struct {
-		return fmt.Errorf("both srcValue and dst must be structs")
+		return errors.New("both srcValue and dst must be structs")
 	}
 
 	// Loop through all the fields in the source struct, and copy them over to the destination struct
@@ -269,7 +269,7 @@ func getBytesFromFile(entryByteSize int, file *os.File) ([]byte, error) {
 		return nil, err
 	}
 	if bytesRead < entryByteSize {
-		return nil, fmt.Errorf("Too few bytes read")
+		return nil, errors.New("Too few bytes read")
 	}
 	return structBytes, nil
 }
