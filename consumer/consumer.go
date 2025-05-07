@@ -237,7 +237,7 @@ func (consumer *StateSyncerConsumer) processNewEntriesInFile(isMempool bool) (bo
 		entriesProcessed = true
 		var entryRevertTriggered bool
 		if !isMempool {
-			entryRevertTriggered, err = consumer.SyncCommittedEntry(stateChangeEntry)	
+			entryRevertTriggered, err = consumer.SyncCommittedEntry(stateChangeEntry)
 		} else {
 			entryRevertTriggered, err = consumer.SyncMempoolEntry(stateChangeEntry)
 		}
@@ -658,11 +658,11 @@ func (consumer *StateSyncerConsumer) retrieveFileIndexForDbOperation(startEntryI
 	}
 	// If we read no bytes, we're at EOF.
 	if bytesRead == 0 {
-		return 0, fmt.Errorf("consumer.retrieveFileIndexForDbOperation: EOF reached")
+		return 0, errors.New("consumer.retrieveFileIndexForDbOperation: EOF reached")
 	}
 	// If we read a non uint64 number of bytes, something is wrong.
 	if bytesRead < 8 {
-		return 0, fmt.Errorf("consumer.retrieveFileIndexForDbOperation: Too few bytes read")
+		return 0, errors.New("consumer.retrieveFileIndexForDbOperation: Too few bytes read")
 	}
 
 	// Use binary package to read a uint64 index from the byte slice representing the index of the db operation.

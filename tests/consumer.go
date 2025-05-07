@@ -434,10 +434,10 @@ func (th *TestHandler) WaitForMatchingEntryBatch(searchCriteria *ConsumerEventSe
 				TransactionCommits:   transactionCommits,
 				TransactionInitiates: transactionInitiates,
 				LastTransactionEvent: lastTransactionEvent,
-			}, fmt.Errorf("WaitForMatchingEntryBatch: Entry not found in entry batch")
+			}, errors.New("WaitForMatchingEntryBatch: Entry not found in entry batch")
 		}
 	}
-	return nil, fmt.Errorf("WaitForMatchingEntryBatch: Entry not found in entry batch")
+	return nil, errors.New("WaitForMatchingEntryBatch: Entry not found in entry batch")
 }
 
 // Check to see if the batch event matches the search criteria.
@@ -587,7 +587,7 @@ func (th *TestHandler) WaitForTxnHash(txnHash string, isMempool *bool) (*EntrySc
 			}
 		}
 	}
-	return nil, fmt.Errorf("WaitForTxnHash: Transaction not found in entry batch")
+	return nil, errors.New("WaitForTxnHash: Transaction not found in entry batch")
 }
 
 func ParseTransactionsFromEntryBatch(entryBatch []*lib.StateChangeEntry, params *lib.DeSoParams) ([]*entries.PGTransactionEntry, error) {
