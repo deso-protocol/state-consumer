@@ -168,6 +168,7 @@ func VerifyTransactionStateChanges(
 func TestConsumer(t *testing.T) {
 
 	desoParams := &lib.DeSoTestnetParams
+	// TODO: Cleanup the consumer test environemnt fn to remove consumer specific logic.
 	testConfig, testHandler, _, _, _, cleanupFunc := SetupConsumerTestEnvironment(t, 3, pdh_tests.RandString(10), desoParams)
 	defer cleanupFunc()
 
@@ -289,7 +290,7 @@ func TestConsumer(t *testing.T) {
 			return nil
 		},
 	)
-}q
+}
 
 func TestConsumerBulk(t *testing.T) {
 
