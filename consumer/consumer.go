@@ -18,6 +18,8 @@ import (
 
 const (
 	ConsumerProgressFilename = "consumer-progress.bin"
+	// MaxMempoolErrors is the maximum number of consecutive mempool errors before returning an error
+	MaxMempoolErrors = 5
 )
 
 // StateSyncerConsumer is a struct that contains the persisted state that is needed to consume state changes from a file.
@@ -84,6 +86,9 @@ type StateSyncerConsumer struct {
 
 	// Whether to stop the consumer.
 	StopConsumer bool
+
+	// Track consecutive mempool errors across function calls.
+	ConsecutiveMempoolErrors int
 }
 
 func (consumer *StateSyncerConsumer) InitializeAndRun(
@@ -124,6 +129,7 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 	consumer.AppliedMempoolEntries = make([]*lib.StateChangeEntry, 0)
 	consumer.CurrentMempoolEntryFlushId = uuid.Nil
 	consumer.CurrentConfirmedEntryFlushId = uuid.Nil
+	consumer.ConsecutiveMempoolErrors = 0
 
 	stateChangeFilePath := filepath.Join(stateChangeDir, lib.StateChangeFileName)
 	stateChangeIndexFilePath := filepath.Join(stateChangeDir, lib.StateChangeIndexFileName)
@@ -226,10 +232,21 @@ func (consumer *StateSyncerConsumer) processNewEntriesInFile(isMempool bool) (bo
 		if err != nil {
 			// If the error is from the mempool file, don't kill the process, just log the error.
 			if isMempool {
-				glog.Errorf("consumer.processNewEntriesInFile: Error reading next mempool entry from file: %s", err.Error())
+				consumer.ConsecutiveMempoolErrors++
+
+				// If we've exceeded the maximum number of mempool errors, return the error
+				if consumer.ConsecutiveMempoolErrors >= MaxMempoolErrors {
+					return revertTriggered, entriesProcessed, errors.Wrapf(err, "consumer.processNewEntriesInFile: Maximum mempool errors (%d) exceeded", MaxMempoolErrors)
+				}
+				glog.Errorf("consumer.processNewEntriesInFile: Error reading next mempool entry from file (error %d/%d): %s", consumer.ConsecutiveMempoolErrors, MaxMempoolErrors, err.Error())
 				break
 			}
 			return revertTriggered, entriesProcessed, errors.Wrapf(err, "consumer.processNewEntriesInFile: Error reading next entry from file")
+		}
+
+		// Reset consecutive mempool error count on successful retrieval
+		if isMempool {
+			consumer.ConsecutiveMempoolErrors = 0
 		}
 		if fileEOF {
 			break
