@@ -19,7 +19,7 @@ import (
 const (
 	ConsumerProgressFilename = "consumer-progress.bin"
 	// MaxMempoolErrors is the maximum number of consecutive mempool errors before returning an error
-	MaxMempoolErrors = 5
+	MaxMempoolErrors = 100
 )
 
 // StateSyncerConsumer is a struct that contains the persisted state that is needed to consume state changes from a file.
