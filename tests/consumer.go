@@ -142,7 +142,7 @@ func SetupConsumerTestEnvironment(t *testing.T, testUserCount int, entropyStr st
 	stateChangeDir := fmt.Sprintf("./ss/state-changes-%s-%s", t.Name(), stateDirPostFix)
 	consumerProgressDir := fmt.Sprintf("./ss/consumer-progress-%s-%s", t.Name(), stateDirPostFix)
 
-	apiServer, nodeServer := newTestApiServer(t, starterUser, 17001, stateChangeDir)
+	apiServer, nodeServer, badgerDir := newTestApiServer(t, starterUser, 17001, stateChangeDir)
 
 	require.NoError(t, err)
 
@@ -153,6 +153,8 @@ func SetupConsumerTestEnvironment(t *testing.T, testUserCount int, entropyStr st
 
 	testConfig, err := pdh_tests.SetupTestEnvironment(testUserCount, entropyStr, false)
 	require.NoError(t, err)
+
+	testConfig.NodeClient.BadgerDir = badgerDir
 
 	testHandler := NewTestHandler(params)
 
@@ -169,7 +171,7 @@ func SetupConsumerTestEnvironment(t *testing.T, testUserCount int, entropyStr st
 			consumerProgressDir,
 			500000,
 			1,
-			true,
+			false,
 			testHandler,
 		)
 		if err != nil && !errors.Is(err, context.Canceled) {
@@ -197,7 +199,7 @@ func SetupConsumerTestEnvironment(t *testing.T, testUserCount int, entropyStr st
 }
 
 // TODO: Make sure that state change dir gets cleaned up.
-func newTestApiServer(t *testing.T, starterUser *pdh_tests.TestUser, apiPort uint16, stateChangeDir string) (*routes.APIServer, *lib.Server) {
+func newTestApiServer(t *testing.T, starterUser *pdh_tests.TestUser, apiPort uint16, stateChangeDir string) (*routes.APIServer, *lib.Server, string) {
 	// Create a badger db instance.
 	badgerDB, badgerDir := routes.GetTestBadgerDb(t)
 
@@ -256,7 +258,7 @@ func newTestApiServer(t *testing.T, starterUser *pdh_tests.TestUser, apiPort uin
 	// Initialize api server.
 	apiServer.MinFeeRateNanosPerKB = node.Config.MinFeerate
 
-	return apiServer, node.Server
+	return apiServer, node.Server, badgerDir
 }
 
 // Function to decode state change entries with a generic type EncoderType.

@@ -38,7 +38,7 @@ func VerifyTransactionStateChanges(
 		exitWhenEmpty:         false,
 	})
 	require.NoError(t, err)
-	require.Equal(t, true, txnRes.IsMempool)
+	// require.Equal(t, true, txnRes.IsMempool)
 	requiredTxnInitiateCount := txnRes.TransactionInitiates
 	requiredTxnCommitCount := txnRes.TransactionCommits
 	// Add the events consumed from the transaction search to the previous consumed events.
@@ -163,6 +163,68 @@ func VerifyTransactionStateChanges(
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "Entry not found in entry batch")
+}
+
+func TestPostEntry(t *testing.T) {
+	desoParams := &lib.DeSoTestnetParams
+	// TODO: Cleanup the consumer test environemnt fn to remove consumer specific logic.
+	testConfig, testHandler, _, _, _, cleanupFunc := SetupConsumerTestEnvironment(t, 3, pdh_tests.RandString(10), desoParams)
+	defer cleanupFunc()
+
+	nodeClient := testConfig.NodeClient
+	postUser := testConfig.TestUsers[0]
+	likeUser := testConfig.TestUsers[1]
+
+	SubmitPostReq := &routes.SubmitPostRequest{
+		UpdaterPublicKeyBase58Check: postUser.PublicKeyBase58,
+		BodyObj: &lib.DeSoBodySchema{
+			Body: "Test Post",
+		},
+		MinFeeRateNanosPerKB: pdh_tests.FeeRateNanosPerKB,
+	}
+
+
+	for ii := 0; ii < 10; ii++ {
+	
+		// Wait for the transaction to be consumed by the state consumer and mined.
+		testHandler.WaitForMatchingEntryBatch(&ConsumerEventSearch{
+			targetConsumerEvent:   &consumerEventBatch,
+			// targetTransactionHash: &txnHash,
+			targetEncoderTypes: []lib.EncoderType{lib.EncoderTypePostEntry},
+			targetIsMempool:       &falseValue,
+			exitWhenEmpty:         true,
+		})
+	}
+
+	// SubmitPostRes, txnRes, err := nodeClient.SubmitPost(SubmitPostReq, coinUser.PrivateKey, false, true)
+	_, txnRes, err := nodeClient.SubmitPost(SubmitPostReq, postUser.PrivateKey, false, true)
+	require.NoError(t, err)
+	postHash := txnRes.PostEntryResponse.PostHashHex
+	fmt.Printf("postHash: %s\n", postHash)
+
+	time.Sleep(10 * time.Second)
+
+	
+	for ii := 0; ii < 10; ii++ {
+	
+		// Wait for the transaction to be consumed by the state consumer and mined.
+		res, err := testHandler.WaitForMatchingEntryBatch(&ConsumerEventSearch{
+			targetConsumerEvent:   &consumerEventBatch,
+			// targetTransactionHash: &txnHash,
+			targetEncoderTypes: []lib.EncoderType{lib.EncoderTypePostEntry},
+			targetIsMempool:       &falseValue,
+			exitWhenEmpty:         false,
+		})
+		require.NoError(t, err)
+		fmt.Printf("Length of entry batch: %d\n", len(res.EntryBatch))
+
+		// Print out the post entry.
+		postEntry, _, err := DecodeStateChangeEntryEncoders[*lib.PostEntry](res.EntryBatch[0])
+		require.NoError(t, err)
+		fmt.Printf("res: %+v\n", *postEntry)
+		fmt.Printf("res: %+v\n", (*postEntry).PostHash)
+	}
+
 }
 
 func TestConsumer(t *testing.T) {

@@ -294,13 +294,24 @@ func (consumer *StateSyncerConsumer) SyncCommittedEntry(stateChangeEntry *lib.St
 		consumer.CurrentConfirmedEntryFlushId = stateChangeEntry.FlushId
 		if !consumer.IsHypersyncing {
 			// Log the handling of the flush.
-			fmt.Println("Now handling flush ", stateChangeEntry.FlushId.String())
+			glog.V(2).Infof("Now handling flush %s", stateChangeEntry.FlushId.String())
 		}
 	}
 	// Detect if this entry represets a sync state change and emit
 	if err := consumer.detectAndHandleSyncEvent(stateChangeEntry); err != nil {
 		return revertTriggered, errors.Wrapf(err, "consumer.processNewEntriesInFile: Error detecting sync event")
 	}
+
+	// if stateChangeEntry.EncoderType == lib.EncoderTypePostEntry {
+	// 	fmt.Printf("\n\n***SyncCommittedEntry: %+v\n\n", stateChangeEntry)
+	// 	// Decode post entry from the stateChangeEntry.EncoderBytes.
+	// 	postEntry := &lib.PostEntry{}
+	// 	if err := DecodeEntry(postEntry, stateChangeEntry.EncoderBytes); err != nil {
+	// 		fmt.Printf("\n\n***Error decoding post entry: %+v\n\n", err)
+	// 	} else {
+	// 		fmt.Printf("\n\n***PostEntry: %+v\n\n", postEntry)
+	// 	}
+	// }
 	// Handle the state change entry.
 	if err := consumer.handleStateChangeEntry(stateChangeEntry, false); err != nil {
 		return revertTriggered, errors.Wrapf(err, "consumer.processNewEntriesInFile: Error handling state change entry")
