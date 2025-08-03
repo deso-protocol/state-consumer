@@ -89,27 +89,117 @@ type StateSyncerConsumer struct {
 
 	// Track consecutive mempool errors across function calls.
 	ConsecutiveMempoolErrors int
+
+	// New FileProcessor for diff-based architecture (when applicable)
+	FileProcessor *FileProcessor
 }
 
 func (consumer *StateSyncerConsumer) InitializeAndRun(
 	stateChangeDir string, consumerProgressFilename string, batchBytes uint64,
 	threadLimit int, syncMempool bool, handler StateSyncerDataHandler) error {
+
+	// First, detect if we should use the new diff-based architecture or legacy single-file approach
+	useNewArchitecture, err := consumer.shouldUseNewArchitecture(stateChangeDir)
+	if err != nil {
+		return errors.Wrapf(err, "consumer.InitializeAndRun: Error detecting file architecture")
+	}
+
+	if useNewArchitecture {
+		glog.Infof("Detected new diff-based file format, using FileProcessor architecture")
+		return consumer.runWithNewArchitecture(stateChangeDir, consumerProgressFilename, batchBytes, threadLimit, syncMempool, handler)
+	}
+
+	glog.Infof("Using legacy single-file consumer architecture")
+	return consumer.runWithLegacyArchitecture(stateChangeDir, consumerProgressFilename, batchBytes, threadLimit, syncMempool, handler)
+}
+
+// runWithNewArchitecture uses the new FileProcessor for diff-based file processing
+func (consumer *StateSyncerConsumer) runWithNewArchitecture(
+	stateChangeDir string, consumerProgressDir string, batchBytes uint64,
+	threadLimit int, syncMempool bool, handler StateSyncerDataHandler) error {
+
+	// Configure the new FileProcessor
+	config := FileProcessorConfig{
+		StateChangeDir:      stateChangeDir,
+		ProgressDir:         consumerProgressDir,
+		MaxConcurrentChunks: threadLimit,
+		BatchSize:           batchBytes / 1000, // Convert bytes to approximate entry count
+	}
+
+	// Create and start the new file processor
+	fileProcessor, err := NewFileProcessor(config, handler)
+	if err != nil {
+		return errors.Wrapf(err, "consumer.runWithNewArchitecture: Error creating FileProcessor")
+	}
+
+	// Store the file processor for cleanup
+	consumer.FileProcessor = fileProcessor
+
+	// Start processing - this will handle hypersync → committed blocks → mempool flow automatically
+	if err := fileProcessor.Start(); err != nil {
+		return errors.Wrapf(err, "consumer.runWithNewArchitecture: Error starting FileProcessor")
+	}
+
+	glog.Infof("FileProcessor started successfully - processing diff-based state changes")
+	return nil
+}
+
+// runWithLegacyArchitecture uses the original single-file processing logic
+func (consumer *StateSyncerConsumer) runWithLegacyArchitecture(
+	stateChangeDir string, consumerProgressFilename string, batchBytes uint64,
+	threadLimit int, syncMempool bool, handler StateSyncerDataHandler) error {
+
 	// initialize the consumer
 	err := consumer.initialize(stateChangeDir, consumerProgressFilename, batchBytes, threadLimit, syncMempool, handler)
 	if err != nil && err.Error() != "EOF" {
-		return errors.Wrapf(err, "consumer.InitializeAndRun: Error initializing consumer")
+		return errors.Wrapf(err, "consumer.runWithLegacyArchitecture: Error initializing consumer")
 	}
 	// If there are entries to read, processNewEntriesInFile an initial scan of the state change file.
 	if err == nil || err.Error() != "EOF" {
 		if _, _, err = consumer.processNewEntriesInFile(false); err != nil {
-			return errors.Wrapf(err, "consumer.InitializeAndRun: Error running consumer")
+			return errors.Wrapf(err, "consumer.runWithLegacyArchitecture: Error running consumer")
 		}
 	}
 	// After we've done an initial scan, create a watcher to handle any new writes to the state change file.
 	if err = consumer.watchFileAndScanOnWrite(); err != nil {
-		return errors.Wrapf(err, "consumer.InitializeAndRun: Error watching file")
+		return errors.Wrapf(err, "consumer.runWithLegacyArchitecture: Error watching file")
 	}
 	return nil
+}
+
+// shouldUseNewArchitecture detects whether to use the new diff-based FileProcessor or legacy single-file processing
+func (consumer *StateSyncerConsumer) shouldUseNewArchitecture(stateChangeDir string) (bool, error) {
+	// Create a temporary FileManager to check for new format files
+	fm, err := NewFileManager(stateChangeDir)
+	if err != nil {
+		// If we can't create FileManager, fall back to legacy
+		glog.Warningf("Failed to create FileManager for detection: %v, falling back to legacy", err)
+		return false, nil
+	}
+
+	// Check if new format files exist
+	hasNewFormat := fm.HasNewFormatFiles()
+	hasLegacyFormat := fm.HasLegacyFiles()
+
+	// Decision logic:
+	// 1. If we have new format files, use new architecture
+	// 2. If we only have legacy files, use legacy architecture
+	// 3. If we have both, prefer new architecture (migration scenario)
+	// 4. If we have neither, use new architecture (fresh start)
+
+	if hasNewFormat {
+		glog.Infof("Detected new format files (hypersync chunks, committed blocks, or mempool diffs)")
+		return true, nil
+	}
+
+	if hasLegacyFormat {
+		glog.Infof("Detected legacy format files (state-changes.bin, mempool.bin)")
+		return false, nil
+	}
+
+	// No files detected - default to new architecture for fresh installations
+	glog.Infof("No existing files detected, defaulting to new diff-based architecture")
+	return true, nil
 }
 
 // Open the state change file and the index file, and determine the byte index that the state syncer should start
@@ -847,4 +937,11 @@ func (consumer *StateSyncerConsumer) cleanup() error {
 
 func (consumer *StateSyncerConsumer) Stop() {
 	consumer.StopConsumer = true
+
+	// If using new architecture, also stop the FileProcessor
+	if consumer.FileProcessor != nil {
+		if err := consumer.FileProcessor.Stop(); err != nil {
+			glog.Errorf("Error stopping FileProcessor: %v", err)
+		}
+	}
 }
