@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"os"
 	"sort"
@@ -34,6 +35,8 @@ type HypersyncProcessor struct {
 	// Processing control
 	stopProcessing chan bool
 	processingWG   sync.WaitGroup
+
+	currentBatchType lib.EncoderType
 }
 
 // HypersyncChunkResult represents the result of processing a hypersync chunk
@@ -59,13 +62,18 @@ func NewHypersyncProcessor(
 		maxConcurrentChunks: maxConcurrentChunks,
 		batchSize:           batchSize,
 		processedChunks:     make(map[uint64]bool),
-		stopProcessing:      make(chan bool),
+		stopProcessing:      make(chan bool, 1),
 	}
 }
 
 // StartHypersyncProcessing begins processing hypersync chunks asynchronously
 func (hp *HypersyncProcessor) StartHypersyncProcessing() error {
 	glog.Infof("Starting hypersync chunk processing with max %d concurrent chunks", hp.maxConcurrentChunks)
+
+	// Emit hypersync start event
+	if err := hp.dataHandler.HandleSyncEvent(SyncEventHypersyncStart); err != nil {
+		return errors.Wrap(err, "failed to handle hypersync start event")
+	}
 
 	// Set processing mode to hypersync
 	if err := hp.progressManager.SetMode(ModeHypersync); err != nil {
@@ -82,7 +90,7 @@ func (hp *HypersyncProcessor) StartHypersyncProcessing() error {
 func (hp *HypersyncProcessor) processHypersyncLoop() {
 	defer hp.processingWG.Wait() // Wait for all chunks to complete
 
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(100 * time.Millisecond) // Much more reasonable interval
 	defer ticker.Stop()
 
 	semaphore := make(chan bool, hp.maxConcurrentChunks)
@@ -97,16 +105,16 @@ func (hp *HypersyncProcessor) processHypersyncLoop() {
 			glog.Infof("Stopping hypersync processing")
 			return
 		case <-ticker.C:
-			if err := hp.processAvailableChunks(semaphore, results); err != nil {
+			if err := hp.processAllAvailableHypersyncChunks(semaphore, results); err != nil {
 				glog.Errorf("Error processing available chunks: %v", err)
 			}
 		}
 	}
 }
 
-// processAvailableChunks finds and processes available hypersync chunks
-func (hp *HypersyncProcessor) processAvailableChunks(semaphore chan bool, results chan HypersyncChunkResult) error {
-	// Discover all files
+// processAllAvailableHypersyncChunks discovers files once and processes all available hypersync chunks
+func (hp *HypersyncProcessor) processAllAvailableHypersyncChunks(semaphore chan bool, results chan HypersyncChunkResult) error {
+	// Discover all files once
 	allFiles, err := hp.fileManager.DiscoverAllFiles()
 	if err != nil {
 		return errors.Wrap(err, "failed to discover files")
@@ -137,7 +145,9 @@ func (hp *HypersyncProcessor) processAvailableChunks(semaphore chan bool, result
 		return *nextChunks[i].ChunkId < *nextChunks[j].ChunkId
 	})
 
-	// Process chunks up to our concurrency limit
+	var chunksStarted int
+
+	// Process ALL available chunks up to our concurrency limit
 	for _, chunk := range nextChunks {
 		if chunk.ChunkId == nil {
 			continue
@@ -156,6 +166,13 @@ func (hp *HypersyncProcessor) processAvailableChunks(semaphore chan bool, result
 		select {
 		case semaphore <- true:
 			// Start processing this chunk
+			chunksStarted++
+
+			// Log progress every 25 chunks
+			if chunksStarted%25 == 0 {
+				fmt.Printf("📊 HYPERSYNC PROGRESS: Started processing %d chunks (current: chunk %d)\n",
+					chunksStarted, *chunk.ChunkId)
+			}
 			hp.processingWG.Add(1)
 			go hp.processHypersyncChunk(chunk, semaphore, results)
 		default:
@@ -164,7 +181,16 @@ func (hp *HypersyncProcessor) processAvailableChunks(semaphore chan bool, result
 		}
 	}
 
+	if chunksStarted > 0 {
+		fmt.Printf("📊 HYPERSYNC BATCH: Started processing %d chunks in this batch\n", chunksStarted)
+	}
+
 	return nil
+}
+
+// processAvailableChunks finds and processes available hypersync chunks (legacy method for compatibility)
+func (hp *HypersyncProcessor) processAvailableChunks(semaphore chan bool, results chan HypersyncChunkResult) error {
+	return hp.processAllAvailableHypersyncChunks(semaphore, results)
 }
 
 // processHypersyncChunk processes a single hypersync chunk file
@@ -246,9 +272,6 @@ func (hp *HypersyncProcessor) readAndProcessChunkFile(chunkFile *FileInfo) (int,
 
 		// Convert KV pairs to StateChangeEntries
 		for _, kv := range kvList.Kv {
-			if !isCoreStateKey(kv.Key) {
-				continue // Skip non-core state keys
-			}
 
 			stateChangeEntry, err := hp.kvToStateChangeEntry(kv, chunkFile.BlockHeight)
 			if err != nil {
@@ -256,21 +279,25 @@ func (hp *HypersyncProcessor) readAndProcessChunkFile(chunkFile *FileInfo) (int,
 				continue
 			}
 
-			batchEntries = append(batchEntries, stateChangeEntry)
-			entriesProcessed++
-
-			// Process batch if it reaches the batch size
-			if uint64(len(batchEntries)) >= hp.batchSize {
+			// Process batch if it reaches the batch size or if the encoder type changes
+			if (len(batchEntries) > 0 && stateChangeEntry.EncoderType != hp.currentBatchType) || uint64(len(batchEntries)) >= hp.batchSize {
+				// Process the current batch with the correct type
 				if err := hp.dataHandler.HandleEntryBatch(batchEntries, false); err != nil {
 					return entriesProcessed, errors.Wrap(err, "failed to handle entry batch")
 				}
 				batchEntries = []*lib.StateChangeEntry{}
 			}
+
+			// Update current batch type and add entry to current batch
+			hp.currentBatchType = stateChangeEntry.EncoderType
+			batchEntries = append(batchEntries, stateChangeEntry)
+			entriesProcessed++
 		}
 	}
 
 	// Process remaining entries in batch
 	if len(batchEntries) > 0 {
+		hp.currentBatchType = batchEntries[0].EncoderType
 		if err := hp.dataHandler.HandleEntryBatch(batchEntries, false); err != nil {
 			return entriesProcessed, errors.Wrap(err, "failed to handle final entry batch")
 		}
@@ -291,9 +318,20 @@ func (hp *HypersyncProcessor) kvToStateChangeEntry(kv *pb.KV, blockHeight uint64
 	// Try to decode the encoder type if possible
 	if isEncoder, encoder := lib.StateKeyToDeSoEncoder(kv.Key); isEncoder && encoder != nil {
 		stateChangeEntry.EncoderType = encoder.GetEncoderType()
-		if len(kv.Value) > 0 {
+
+		// Handle special encoding for blocks and block nodes (like state syncer does)
+		switch encoder.GetEncoderType() {
+		case lib.EncoderTypeBlock:
+			stateChangeEntry.EncoderBytes = lib.AddEncoderMetadataToMsgDeSoBlockBytes(kv.Value, blockHeight)
+		case lib.EncoderTypeBlockNode:
+			stateChangeEntry.EncoderBytes = lib.AddEncoderMetadataToBlockNodeBytes(kv.Value, blockHeight)
+		default:
+			stateChangeEntry.EncoderBytes = kv.Value
+		}
+
+		if len(stateChangeEntry.EncoderBytes) > 0 {
 			dst := encoder.GetEncoderType().New()
-			if ok, err := lib.DecodeFromBytes(dst, bytes.NewReader(kv.Value)); ok && err == nil {
+			if ok, err := lib.DecodeFromBytes(dst, bytes.NewReader(stateChangeEntry.EncoderBytes)); ok && err == nil {
 				stateChangeEntry.Encoder = dst
 			}
 		}
@@ -385,7 +423,16 @@ func (hp *HypersyncProcessor) transitionFromHypersync() error {
 // StopProcessing stops the hypersync processing
 func (hp *HypersyncProcessor) StopProcessing() {
 	glog.Infof("Stopping hypersync processing...")
-	hp.stopProcessing <- true
+
+	// Use select with default to prevent blocking if channel is full or no receiver
+	select {
+	case hp.stopProcessing <- true:
+		// Signal sent successfully
+	default:
+		// Channel is full or no receiver, which is fine
+		glog.V(2).Infof("Stop signal already sent or no receiver")
+	}
+
 	hp.processingWG.Wait()
 	glog.Infof("Hypersync processing stopped")
 }
@@ -403,47 +450,5 @@ func (hp *HypersyncProcessor) GetProcessingStats() map[string]interface{} {
 		"processed_chunks":     len(hp.processedChunks),
 		"max_concurrent":       hp.maxConcurrentChunks,
 		"batch_size":           hp.batchSize,
-	}
-}
-
-// isCoreStateKey checks if a key represents core state (this should match the node-side logic)
-func isCoreStateKey(key []byte) bool {
-	if len(key) == 0 {
-		return false
-	}
-
-	// Check against known core state prefixes
-	// This should match the logic in the node's state change syncer
-	firstByte := key[0]
-
-	// Core state prefixes (from lib/prefixes.go)
-	switch firstByte {
-	case 0: // PrefixPublicKeyTimestampToPrivateMessage
-		return true
-	case 1: // PrefixBlockHashToBlock
-		return true
-	case 2: // PrefixBitcoinBurnTxIDToDesoBlock
-		return true
-	case 3: // PrefixPKIDToProfileEntry
-		return true
-	case 4: // PrefixPublicKeyToPKID
-		return true
-	case 5: // PrefixPostHashToPostEntry
-		return true
-	case 6: // PrefixPKIDCreatorPKIDToDAOCoinBalanceEntry
-		return true
-	case 7: // PrefixHODLerPKIDCreatorPKIDToDAOCoinBalanceEntry
-		return true
-	case 8: // PrefixCreatorPKIDFollowerPKIDToFollowEntry
-		return true
-	case 9: // PrefixFollowerPKIDCreatorPKIDToFollowEntry
-		return true
-	case 10: // PrefixLikerPubKeyToLikedPostHashToLikeEntry
-		return true
-	case 11: // PrefixLikedPostHashToLikerPubKeyToLikeEntry
-		return true
-	// Add more prefixes as needed
-	default:
-		return false
 	}
 }

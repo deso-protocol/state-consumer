@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"os"
 	"sort"
@@ -32,6 +33,8 @@ type MempoolProcessor struct {
 
 	// Processing control
 	stopProcessing chan bool
+
+	currentBatchType lib.EncoderType
 }
 
 // MempoolResult represents the result of processing a mempool file
@@ -59,11 +62,81 @@ func NewMempoolProcessor(
 		dataHandler:      dataHandler,
 		batchSize:        batchSize,
 		processedFiles:   make(map[string]bool),
-		stopProcessing:   make(chan bool),
+		stopProcessing:   make(chan bool, 1),
 	}
 }
 
-// ProcessNextMempoolFile finds and processes the next available mempool diff file
+// ProcessAllAvailableMempoolFiles discovers files once and processes all available mempool files for the current block height only
+func (mp *MempoolProcessor) ProcessAllAvailableMempoolFiles() ([]*MempoolResult, error) {
+	// Discover all files once
+	allFiles, err := mp.fileManager.DiscoverAllFiles()
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to discover files")
+	}
+
+	// Get current progress
+	state := mp.progressManager.GetCurrentState()
+
+	// Get all mempool files sorted by timestamp
+	mempoolFiles := mp.fileManager.GetFilesByType(allFiles, FileTypeMempoolDiff)
+
+	var results []*MempoolResult
+	var processedCount int
+
+	// Process files for current block height only
+	for _, file := range mempoolFiles {
+		// Skip files that are already processed
+		if file.Timestamp <= state.LastMempoolTimestamp {
+			continue
+		}
+
+		// If this file is from the current block height, process it
+		if file.BlockHeight == state.CurrentMempoolBlockHeight {
+			glog.V(2).Infof("Processing mempool file: %s (block %d, timestamp %d)",
+				file.Path, file.BlockHeight, file.Timestamp)
+
+			// Log progress every 25 files
+			processedCount++
+			if processedCount%25 == 0 {
+				fmt.Printf("📊 MEMPOOL PROGRESS: Processed %d mempool files (current: block %d, timestamp %d)\n",
+					processedCount, file.BlockHeight, file.Timestamp)
+			}
+
+			result, err := mp.processMempoolFile(file)
+			if err != nil {
+				return results, errors.Wrapf(err, "failed to process mempool file %s", file.Path)
+			}
+
+			if result.Error != nil {
+				// Stop processing on error but return what we've processed so far
+				results = append(results, result)
+				return results, nil
+			}
+
+			results = append(results, result)
+
+			// Update our local state reference for next iteration
+			state = mp.progressManager.GetCurrentState()
+
+		} else if file.BlockHeight > state.CurrentMempoolBlockHeight {
+			// If we encounter a file from a higher block height, stop processing
+			// This indicates a block transition should happen
+			glog.V(2).Infof("Encountered mempool file from higher block height %d (current: %d), stopping batch processing",
+				file.BlockHeight, state.CurrentMempoolBlockHeight)
+			break
+		}
+		// Files from lower block heights are ignored (shouldn't happen with proper sorting)
+	}
+
+	if processedCount > 0 {
+		fmt.Printf("📊 MEMPOOL BATCH: Processed %d mempool files for block %d in this batch\n",
+			processedCount, state.CurrentMempoolBlockHeight)
+	}
+
+	return results, nil
+}
+
+// ProcessNextMempoolFile finds and processes the next single available mempool diff file
 func (mp *MempoolProcessor) ProcessNextMempoolFile() (*MempoolResult, error) {
 	// Discover all files
 	allFiles, err := mp.fileManager.DiscoverAllFiles()
@@ -74,20 +147,37 @@ func (mp *MempoolProcessor) ProcessNextMempoolFile() (*MempoolResult, error) {
 	// Get current progress
 	state := mp.progressManager.GetCurrentState()
 
-	// Find next mempool file to process
-	nextFile, err := mp.fileManager.GetNextMempoolFile(allFiles, state.CurrentMempoolBlockHeight, state.LastMempoolTimestamp)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to get next mempool file")
+	// Get all mempool files sorted by timestamp
+	mempoolFiles := mp.fileManager.GetFilesByType(allFiles, FileTypeMempoolDiff)
+
+	// Find the next unprocessed file for the current block height
+	for _, file := range mempoolFiles {
+		// Skip files that are already processed
+		if file.Timestamp <= state.LastMempoolTimestamp {
+			continue
+		}
+
+		// If this file is from the current block height, process it
+		if file.BlockHeight == state.CurrentMempoolBlockHeight {
+			glog.V(2).Infof("Processing next mempool file: %s (block %d, timestamp %d)",
+				file.Path, file.BlockHeight, file.Timestamp)
+
+			result, err := mp.processMempoolFile(file)
+			if err != nil {
+				return nil, errors.Wrapf(err, "failed to process mempool file %s", file.Path)
+			}
+
+			return result, nil
+		} else if file.BlockHeight > state.CurrentMempoolBlockHeight {
+			// If we encounter a file from a higher block height, stop processing
+			glog.V(2).Infof("Encountered mempool file from higher block height %d (current: %d), no more files to process",
+				file.BlockHeight, state.CurrentMempoolBlockHeight)
+			break
+		}
+		// Files from lower block heights are ignored (shouldn't happen with proper sorting)
 	}
 
-	if nextFile == nil {
-		return nil, nil // No file to process
-	}
-
-	glog.V(2).Infof("Processing mempool file: %s (block %d, timestamp %d)",
-		nextFile.Path, nextFile.BlockHeight, nextFile.Timestamp)
-
-	return mp.processMempoolFile(nextFile)
+	return nil, nil // No files to process
 }
 
 // processMempoolFile processes a single mempool diff file
@@ -170,31 +260,31 @@ func (mp *MempoolProcessor) readAndProcessMempoolFile(mempoolFile *FileInfo) (in
 
 		// Convert KV pairs to StateChangeEntries
 		for _, kv := range kvList.Kv {
-			if !isCoreStateKey(kv.Key) {
-				continue // Skip non-core state keys
-			}
-
 			stateChangeEntry, err := mp.kvToStateChangeEntry(kv, mempoolFile.BlockHeight, mempoolFile.Timestamp)
 			if err != nil {
 				glog.Warningf("Failed to convert KV to StateChangeEntry: %v", err)
 				continue
 			}
 
-			batchEntries = append(batchEntries, stateChangeEntry)
-			entriesProcessed++
-
-			// Process batch if it reaches the batch size
-			if uint64(len(batchEntries)) >= mp.batchSize {
+			// Process batch if it reaches the batch size or if the encoder type changes
+			if (len(batchEntries) > 0 && stateChangeEntry.EncoderType != mp.currentBatchType) || uint64(len(batchEntries)) >= mp.batchSize {
+				// Process the current batch with the correct type
 				if err := mp.dataHandler.HandleEntryBatch(batchEntries, true); err != nil {
 					return entriesProcessed, errors.Wrap(err, "failed to handle entry batch")
 				}
 				batchEntries = []*lib.StateChangeEntry{}
 			}
+
+			// Update current batch type and add entry to current batch
+			mp.currentBatchType = stateChangeEntry.EncoderType
+			batchEntries = append(batchEntries, stateChangeEntry)
+			entriesProcessed++
 		}
 	}
 
 	// Process remaining entries in batch
 	if len(batchEntries) > 0 {
+		mp.currentBatchType = batchEntries[0].EncoderType
 		if err := mp.dataHandler.HandleEntryBatch(batchEntries, true); err != nil {
 			return entriesProcessed, errors.Wrap(err, "failed to handle final entry batch")
 		}
@@ -215,9 +305,20 @@ func (mp *MempoolProcessor) kvToStateChangeEntry(kv *pb.KV, blockHeight uint64, 
 	// Try to decode the encoder type if possible
 	if isEncoder, encoder := lib.StateKeyToDeSoEncoder(kv.Key); isEncoder && encoder != nil {
 		stateChangeEntry.EncoderType = encoder.GetEncoderType()
-		if len(kv.Value) > 0 {
+
+		// Handle special encoding for blocks and block nodes (like state syncer does)
+		switch encoder.GetEncoderType() {
+		case lib.EncoderTypeBlock:
+			stateChangeEntry.EncoderBytes = lib.AddEncoderMetadataToMsgDeSoBlockBytes(kv.Value, blockHeight)
+		case lib.EncoderTypeBlockNode:
+			stateChangeEntry.EncoderBytes = lib.AddEncoderMetadataToBlockNodeBytes(kv.Value, blockHeight)
+		default:
+			stateChangeEntry.EncoderBytes = kv.Value
+		}
+
+		if len(stateChangeEntry.EncoderBytes) > 0 {
 			dst := encoder.GetEncoderType().New()
-			reader := bytes.NewReader(kv.Value)
+			reader := bytes.NewReader(stateChangeEntry.EncoderBytes)
 			if ok, err := lib.DecodeFromBytes(dst, reader); ok && err == nil {
 				stateChangeEntry.Encoder = dst
 			}
@@ -339,7 +440,16 @@ func (mp *MempoolProcessor) ProcessMempoolFilesForBlock(blockHeight uint64) erro
 // StopProcessing stops the mempool processing
 func (mp *MempoolProcessor) StopProcessing() {
 	glog.Infof("Stopping mempool processing...")
-	mp.stopProcessing <- true
+
+	// Use select with default to prevent blocking if channel is full or no receiver
+	select {
+	case mp.stopProcessing <- true:
+		// Signal sent successfully
+	default:
+		// Channel is full or no receiver, which is fine
+		glog.V(2).Infof("Stop signal already sent or no receiver")
+	}
+
 	glog.Infof("Mempool processing stopped")
 }
 

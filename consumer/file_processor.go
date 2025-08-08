@@ -201,7 +201,7 @@ func (fp *FileProcessor) startMempoolProcessing() error {
 
 // monitorHypersyncProgress monitors hypersync progress and handles transition
 func (fp *FileProcessor) monitorHypersyncProgress() {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
@@ -230,7 +230,7 @@ func (fp *FileProcessor) monitorHypersyncProgress() {
 
 // monitorCommittedBlockFiles monitors for new committed block files
 func (fp *FileProcessor) monitorCommittedBlockFiles() {
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
@@ -362,7 +362,7 @@ func (fp *FileProcessor) GetProgressManager() *ProgressManager {
 
 // processCommittedBlockLoop processes committed block files using the CommittedBlockProcessor
 func (fp *FileProcessor) processCommittedBlockLoop() {
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond) // Much more reasonable interval
 	defer ticker.Stop()
 
 	for {
@@ -370,14 +370,14 @@ func (fp *FileProcessor) processCommittedBlockLoop() {
 		case <-fp.stopChan:
 			return
 		case <-ticker.C:
-			// Process next committed block
-			result, err := fp.committedBlockProcessor.ProcessNextCommittedBlock()
+			// Process ALL available committed blocks in one batch
+			results, err := fp.committedBlockProcessor.ProcessAllAvailableCommittedBlocks()
 			if err != nil {
-				glog.Errorf("Error processing committed block: %v", err)
+				glog.Errorf("Error processing committed blocks: %v", err)
 				continue
 			}
 
-			if result == nil {
+			if len(results) == 0 {
 				// No more committed blocks to process, check for mempool transition
 				if fp.committedBlockProcessor.shouldTransitionToMempool() {
 					glog.Infof("Transitioning from committed blocks to mempool processing")
@@ -387,20 +387,32 @@ func (fp *FileProcessor) processCommittedBlockLoop() {
 				continue
 			}
 
-			if result.Error != nil {
-				glog.Errorf("Committed block processing error: %v", result.Error)
-				continue
+			// Log summary of batch processing
+			totalEntries := 0
+			var totalTime time.Duration
+			errorCount := 0
+
+			for _, result := range results {
+				if result.Error != nil {
+					glog.Errorf("Committed block processing error for block %d: %v", result.BlockHeight, result.Error)
+					errorCount++
+				} else {
+					totalEntries += result.EntriesProcessed
+					totalTime += result.ProcessingTime
+				}
 			}
 
-			glog.V(2).Infof("Processed committed block %d: %d entries in %v",
-				result.BlockHeight, result.EntriesProcessed, result.ProcessingTime)
+			if len(results) > 1 { // Only log batch summary if we processed multiple files
+				glog.Infof("Processed batch of %d committed blocks: %d total entries in %v (errors: %d)",
+					len(results), totalEntries, totalTime, errorCount)
+			}
 		}
 	}
 }
 
 // processMempoolLoop processes mempool files using the MempoolProcessor
 func (fp *FileProcessor) processMempoolLoop() {
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(100 * time.Millisecond) // Much more reasonable interval
 	defer ticker.Stop()
 
 	for {
@@ -415,25 +427,37 @@ func (fp *FileProcessor) processMempoolLoop() {
 				return
 			}
 
-			// Process next mempool file
-			result, err := fp.mempoolProcessor.ProcessNextMempoolFile()
+			// Process ALL available mempool files in one batch
+			results, err := fp.mempoolProcessor.ProcessAllAvailableMempoolFiles()
 			if err != nil {
-				glog.Errorf("Error processing mempool file: %v", err)
+				glog.Errorf("Error processing mempool files: %v", err)
 				continue
 			}
 
-			if result == nil {
+			if len(results) == 0 {
 				// No more mempool files to process for now
 				continue
 			}
 
-			if result.Error != nil {
-				glog.Errorf("Mempool processing error: %v", result.Error)
-				continue
+			// Log summary of batch processing
+			totalEntries := 0
+			var totalTime time.Duration
+			errorCount := 0
+
+			for _, result := range results {
+				if result.Error != nil {
+					glog.Errorf("Mempool processing error for file %s: %v", result.FilePath, result.Error)
+					errorCount++
+				} else {
+					totalEntries += result.EntriesProcessed
+					totalTime += result.ProcessingTime
+				}
 			}
 
-			glog.V(2).Infof("Processed mempool file: %s (%d entries in %v)",
-				result.FilePath, result.EntriesProcessed, result.ProcessingTime)
+			if len(results) > 1 { // Only log batch summary if we processed multiple files
+				glog.Infof("Processed batch of %d mempool files: %d total entries in %v (errors: %d)",
+					len(results), totalEntries, totalTime, errorCount)
+			}
 		}
 	}
 }

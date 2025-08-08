@@ -279,32 +279,6 @@ func TestHypersyncProcessor_GetProcessingStats(t *testing.T) {
 	require.Equal(uint64(100), stats["batch_size"])
 }
 
-func TestIsCoreStateKey(t *testing.T) {
-	require := require.New(t)
-
-	// Test core state keys
-	tests := []struct {
-		key         []byte
-		isCore      bool
-		description string
-	}{
-		{[]byte{}, false, "empty key"},
-		{[]byte{0, 1, 2}, true, "private message prefix"},
-		{[]byte{1, 1, 2}, true, "block hash prefix"},
-		{[]byte{3, 1, 2}, true, "profile entry prefix"},
-		{[]byte{5, 1, 2}, true, "post entry prefix"},
-		{[]byte{255, 1, 2}, false, "unknown prefix"},
-		{[]byte{100, 1, 2}, false, "non-core prefix"},
-	}
-
-	for _, test := range tests {
-		t.Run(test.description, func(t *testing.T) {
-			result := isCoreStateKey(test.key)
-			require.Equal(test.isCore, result, "Key %v should have isCore=%v", test.key, test.isCore)
-		})
-	}
-}
-
 func TestHypersyncProcessor_ProcessChunkResults(t *testing.T) {
 	require := require.New(t)
 

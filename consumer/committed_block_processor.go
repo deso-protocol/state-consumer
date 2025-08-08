@@ -31,6 +31,8 @@ type CommittedBlockProcessor struct {
 
 	// Processing control
 	stopProcessing chan bool
+
+	currentBatchType lib.EncoderType
 }
 
 // CommittedBlockResult represents the result of processing a committed block
@@ -56,13 +58,13 @@ func NewCommittedBlockProcessor(
 		dataHandler:      dataHandler,
 		batchSize:        batchSize,
 		processedBlocks:  make(map[uint64]bool),
-		stopProcessing:   make(chan bool),
+		stopProcessing:   make(chan bool, 1),
 	}
 }
 
-// ProcessNextCommittedBlock finds and processes the next available committed block file
-func (cbp *CommittedBlockProcessor) ProcessNextCommittedBlock() (*CommittedBlockResult, error) {
-	// Discover all files
+// ProcessAllAvailableCommittedBlocks discovers files once and processes all available committed blocks
+func (cbp *CommittedBlockProcessor) ProcessAllAvailableCommittedBlocks() ([]*CommittedBlockResult, error) {
+	// Discover all files once
 	allFiles, err := cbp.fileManager.DiscoverAllFiles()
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to discover files")
@@ -71,19 +73,52 @@ func (cbp *CommittedBlockProcessor) ProcessNextCommittedBlock() (*CommittedBlock
 	// Get current progress
 	state := cbp.progressManager.GetCurrentState()
 
-	// Find next committed block file to process
-	nextFile, err := cbp.fileManager.GetNextCommittedBlockFile(allFiles, state.LastCommittedBlockHeight)
+	// Get all committed block files sorted by height
+	committedFiles := cbp.fileManager.GetFilesByType(allFiles, FileTypeCommittedBlock)
+
+	var results []*CommittedBlockResult
+
+	// Process all available files in sequence
+	for _, file := range committedFiles {
+		if file.BlockHeight <= state.LastCommittedBlockHeight {
+			continue // Already processed
+		}
+
+		glog.V(2).Infof("Processing committed block %d: %s", file.BlockHeight, file.Path)
+
+		result, err := cbp.processCommittedBlockFile(file)
+		if err != nil {
+			return results, errors.Wrapf(err, "failed to process block %d", file.BlockHeight)
+		}
+
+		if result.Error != nil {
+			// Stop processing on error but return what we've processed so far
+			results = append(results, result)
+			return results, nil
+		}
+
+		results = append(results, result)
+
+		// Update our local state reference for next iteration
+		state = cbp.progressManager.GetCurrentState()
+	}
+
+	return results, nil
+}
+
+// ProcessNextCommittedBlock finds and processes the next available committed block file (legacy method for compatibility)
+func (cbp *CommittedBlockProcessor) ProcessNextCommittedBlock() (*CommittedBlockResult, error) {
+	results, err := cbp.ProcessAllAvailableCommittedBlocks()
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to get next committed block file")
+		return nil, err
 	}
 
-	if nextFile == nil {
-		return nil, nil // No file to process
+	if len(results) == 0 {
+		return nil, nil // No files to process
 	}
 
-	glog.V(2).Infof("Processing committed block %d: %s", nextFile.BlockHeight, nextFile.Path)
-
-	return cbp.processCommittedBlockFile(nextFile)
+	// Return the first result for compatibility
+	return results[0], nil
 }
 
 // processCommittedBlockFile processes a single committed block diff file
@@ -205,9 +240,6 @@ func (cbp *CommittedBlockProcessor) readAndProcessBlockFile(blockFile *FileInfo)
 
 		// Convert KV pairs to StateChangeEntries
 		for _, kv := range kvList.Kv {
-			if !isCoreStateKey(kv.Key) {
-				continue // Skip non-core state keys
-			}
 
 			stateChangeEntry, err := cbp.kvToStateChangeEntry(kv, blockFile.BlockHeight)
 			if err != nil {
@@ -215,23 +247,27 @@ func (cbp *CommittedBlockProcessor) readAndProcessBlockFile(blockFile *FileInfo)
 				continue
 			}
 
-			batchEntries = append(batchEntries, stateChangeEntry)
-			entriesProcessed++
-
-			// Process batch if it reaches the batch size
-			if uint64(len(batchEntries)) >= cbp.batchSize {
+			// Process batch if it reaches the batch size or if the encoder type changes
+			if (len(batchEntries) > 0 && stateChangeEntry.EncoderType != cbp.currentBatchType) || uint64(len(batchEntries)) >= cbp.batchSize {
+				// Process the current batch with the correct type
 				if err := cbp.dataHandler.HandleEntryBatch(batchEntries, false); err != nil {
-					return entriesProcessed, errors.Wrap(err, "failed to handle entry batch")
+					return entriesProcessed, errors.Wrapf(err, "failed to handle entry batch for encoder type %d", cbp.currentBatchType)
 				}
 				batchEntries = []*lib.StateChangeEntry{}
 			}
+
+			// Update current batch type and add entry to current batch
+			cbp.currentBatchType = stateChangeEntry.EncoderType
+			batchEntries = append(batchEntries, stateChangeEntry)
+			entriesProcessed++
 		}
 	}
 
-	// Process remaining entries in batch
+	// Process any remaining entries in the final batch
 	if len(batchEntries) > 0 {
+		cbp.currentBatchType = batchEntries[0].EncoderType
 		if err := cbp.dataHandler.HandleEntryBatch(batchEntries, false); err != nil {
-			return entriesProcessed, errors.Wrap(err, "failed to handle final entry batch")
+			return entriesProcessed, errors.Wrapf(err, "failed to handle final entry batch for encoder type %d", cbp.currentBatchType)
 		}
 	}
 
@@ -250,11 +286,25 @@ func (cbp *CommittedBlockProcessor) kvToStateChangeEntry(kv *pb.KV, blockHeight 
 	// Try to decode the encoder type if possible
 	if isEncoder, encoder := lib.StateKeyToDeSoEncoder(kv.Key); isEncoder && encoder != nil {
 		stateChangeEntry.EncoderType = encoder.GetEncoderType()
-		if len(kv.Value) > 0 {
+
+		// Handle special encoding for blocks and block nodes (like state syncer does)
+		switch encoder.GetEncoderType() {
+		case lib.EncoderTypeBlock:
+			stateChangeEntry.EncoderBytes = lib.AddEncoderMetadataToMsgDeSoBlockBytes(kv.Value, blockHeight)
+		case lib.EncoderTypeBlockNode:
+			stateChangeEntry.EncoderBytes = lib.AddEncoderMetadataToBlockNodeBytes(kv.Value, blockHeight)
+		default:
+			stateChangeEntry.EncoderBytes = kv.Value
+		}
+
+		if len(stateChangeEntry.EncoderBytes) > 0 {
 			dst := encoder.GetEncoderType().New()
-			reader := bytes.NewReader(kv.Value)
+			reader := bytes.NewReader(stateChangeEntry.EncoderBytes)
 			if ok, err := lib.DecodeFromBytes(dst, reader); ok && err == nil {
 				stateChangeEntry.Encoder = dst
+			} else {
+				glog.V(3).Infof("Failed to decode value for encoder type %d: ok=%v, err=%v",
+					encoder.GetEncoderType(), ok, err)
 			}
 		}
 	} else {
@@ -264,6 +314,8 @@ func (cbp *CommittedBlockProcessor) kvToStateChangeEntry(kv *pb.KV, blockHeight 
 			stateChangeEntry.EncoderType = keyEncoder.GetEncoderType()
 			stateChangeEntry.Encoder = keyEncoder
 			stateChangeEntry.EncoderBytes = nil
+		} else {
+			glog.V(3).Infof("Both decode methods failed for key prefix %d: %v", kv.Key[0], err)
 		}
 	}
 
@@ -325,7 +377,16 @@ func (cbp *CommittedBlockProcessor) shouldTransitionToMempool() bool {
 // StopProcessing stops the committed block processing
 func (cbp *CommittedBlockProcessor) StopProcessing() {
 	glog.Infof("Stopping committed block processing...")
-	cbp.stopProcessing <- true
+
+	// Use select with default to prevent blocking if channel is full or no receiver
+	select {
+	case cbp.stopProcessing <- true:
+		// Signal sent successfully
+	default:
+		// Channel is full or no receiver, which is fine
+		glog.V(2).Infof("Stop signal already sent or no receiver")
+	}
+
 	glog.Infof("Committed block processing stopped")
 }
 

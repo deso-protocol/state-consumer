@@ -404,8 +404,16 @@ func (fm *FileManager) DetectProcessingMode(allFiles []*FileInfo, currentState *
 		}
 	}
 
-	// Default to mempool mode if no specific files found
-	return ModeMempool
+	// Default to mempool mode in most cases:
+	// 1. If we have processed at least one committed block
+	// 2. If there are actual mempool files present
+	// 3. If no files exist at all (assume hypersync auto-completed)
+	if currentState.LastCommittedBlockHeight > 0 || len(mempoolFiles) > 0 || len(allFiles) == 0 {
+		return ModeMempool
+	}
+
+	// Only stay in committed blocks mode if we have some files but no committed blocks processed yet
+	return ModeCommittedBlocks
 }
 
 // ValidateFileIntegrity performs basic validation on a file
