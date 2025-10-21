@@ -1,11 +1,13 @@
 package consumer
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1580,4 +1582,63 @@ func CheckSliceSize(length int) error {
 		return errors.New("requested slice size exceeds maximum allowed size")
 	}
 	return nil
+}
+
+// tryDecodeAtPosition attempts to decode a StateChangeEntry at a specific file position.
+// Returns the entry, success status, bytes read, and any error encountered.
+func tryDecodeAtPosition(file *os.File, position int64) (*lib.StateChangeEntry, bool, uint64, error) {
+	// Save original position to restore later
+	originalPos, err := file.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return nil, false, 0, err
+	}
+	defer file.Seek(originalPos, io.SeekStart)
+
+	// Seek to the requested position
+	if _, err := file.Seek(position, io.SeekStart); err != nil {
+		return nil, false, 0, err
+	}
+
+	// Create a temporary reader
+	tempReader := bufio.NewReader(file)
+
+	return tryDecodeAtPositionWithReader(file, tempReader, position)
+}
+
+// tryDecodeAtPositionWithReader attempts to decode a StateChangeEntry using a provided reader.
+// This is useful when reading forward sequentially without recreating the reader each time.
+func tryDecodeAtPositionWithReader(file *os.File, reader *bufio.Reader, position int64) (*lib.StateChangeEntry, bool, uint64, error) {
+	// Try to read the entry size (varint)
+	entryByteSize, err := lib.ReadUvarint(reader)
+	if err != nil {
+		return nil, false, 0, err
+	}
+
+	// Sanity check on entry size
+	if entryByteSize == 0 || entryByteSize > 100*1024*1024 { // Max 100MB per entry
+		return nil, false, 0, fmt.Errorf("invalid entry size: %d", entryByteSize)
+	}
+
+	// Check if slice size is safe
+	if err := CheckSliceSize(int(entryByteSize)); err != nil {
+		return nil, false, 0, err
+	}
+
+	// Create a buffer to hold the entry
+	buffer := make([]byte, entryByteSize)
+	bytesRead, err := io.ReadFull(reader, buffer)
+	if err != nil {
+		return nil, false, 0, err
+	}
+	if bytesRead < int(entryByteSize) {
+		return nil, false, 0, fmt.Errorf("not enough bytes read: expected %d, got %d", entryByteSize, bytesRead)
+	}
+
+	// Try to decode the state change entry
+	stateChangeEntry := &lib.StateChangeEntry{}
+	if err := DecodeEntry(stateChangeEntry, buffer); err != nil {
+		return nil, false, entryByteSize, err
+	}
+
+	return stateChangeEntry, true, entryByteSize, nil
 }

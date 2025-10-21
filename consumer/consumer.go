@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -89,6 +91,10 @@ type StateSyncerConsumer struct {
 
 	// Track consecutive mempool errors across function calls.
 	ConsecutiveMempoolErrors int
+
+	// Maximum number of bytes to search backward when attempting diagnostic recovery.
+	// Set to 0 to disable diagnostic recovery mode.
+	MaxRecoveryLookbackBytes uint64
 }
 
 func (consumer *StateSyncerConsumer) InitializeAndRun(
@@ -130,6 +136,19 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 	consumer.CurrentMempoolEntryFlushId = uuid.Nil
 	consumer.CurrentConfirmedEntryFlushId = uuid.Nil
 	consumer.ConsecutiveMempoolErrors = 0
+
+	// Parse MAX_RECOVERY_LOOKBACK_BYTES environment variable for diagnostic recovery mode
+	maxLookbackStr := os.Getenv("MAX_RECOVERY_LOOKBACK_BYTES")
+	if maxLookbackStr != "" {
+		maxLookback, err := strconv.ParseUint(maxLookbackStr, 10, 64)
+		if err != nil {
+			return errors.Wrapf(err, "consumer.initialize: Error parsing MAX_RECOVERY_LOOKBACK_BYTES")
+		}
+		consumer.MaxRecoveryLookbackBytes = maxLookback
+		glog.Infof("consumer.initialize: Diagnostic recovery mode enabled with max lookback of %d bytes", maxLookback)
+	} else {
+		consumer.MaxRecoveryLookbackBytes = 0
+	}
 
 	stateChangeFilePath := filepath.Join(stateChangeDir, lib.StateChangeFileName)
 	stateChangeIndexFilePath := filepath.Join(stateChangeDir, lib.StateChangeIndexFileName)
@@ -382,7 +401,7 @@ func (consumer *StateSyncerConsumer) RevertMempoolEntries() error {
 }
 
 // readAndDecodeNextEntry reads the next state change entry from the state change file and decodes it as a deso encoder.
-func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader, file *os.File) (sce *lib.StateChangeEntry, eof bool, err error) {
+func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader, file *os.File, isMempool bool) (sce *lib.StateChangeEntry, eof bool, err error) {
 	// Get the current position in the file
 	currentPos, err := file.Seek(0, io.SeekCurrent)
 	if err != nil {
@@ -459,11 +478,129 @@ func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader
 
 	}()
 	if err = DecodeEntry(stateChangeEntry, buffer); err != nil {
+		// Attempt diagnostic recovery if configured and not processing mempool
+		if consumer.MaxRecoveryLookbackBytes > 0 && !isMempool {
+			consumer.attemptDiagnosticRecovery(currentPos, file, reader, err)
+		}
 		file.Seek(currentPos, io.SeekStart)
 		return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error decoding entry")
 	}
 
 	return stateChangeEntry, false, err
+}
+
+// attemptDiagnosticRecovery attempts to find the correct file position by searching backward byte-by-byte
+// when an encoder type mismatch error occurs. This is a diagnostic tool to help identify file corruption.
+func (consumer *StateSyncerConsumer) attemptDiagnosticRecovery(errorPos int64, file *os.File, reader *bufio.Reader, decodeErr error) {
+	// Check if this is an encoder type mismatch error
+	errStr := decodeErr.Error()
+	if !strings.Contains(errStr, "encoder type") || !strings.Contains(errStr, "doesn't match") {
+		return
+	}
+
+	glog.Infof("\n=== DIAGNOSTIC RECOVERY MODE ACTIVATED ===")
+	glog.Infof("Error: %v", decodeErr)
+	glog.Infof("Current Position: %d bytes", errorPos)
+	glog.Infof("Max Lookback: %d bytes", consumer.MaxRecoveryLookbackBytes)
+	glog.Infof("Entry Type: Committed (NOT Mempool)")
+	glog.Infof("Initial Sync Mode: %v", consumer.SyncingFromBeginning)
+	glog.Infof("\nSearching backward...")
+
+	// Calculate how far back we can safely search
+	maxSearchPos := errorPos - int64(consumer.MaxRecoveryLookbackBytes)
+	if maxSearchPos < 0 {
+		maxSearchPos = 0
+	}
+
+	var foundEntry *lib.StateChangeEntry
+	var foundPos int64
+	var foundSize uint64
+
+	// Search backward byte by byte
+	for searchPos := errorPos - 1; searchPos >= maxSearchPos; searchPos-- {
+		// Print progress every 1000 bytes
+		if (errorPos-searchPos)%1000 == 0 {
+			glog.Infof("Searched back %d bytes...", errorPos-searchPos)
+		}
+
+		// Try to decode at this position
+		entry, success, entrySize, _ := tryDecodeAtPosition(file, searchPos)
+		if success && entry != nil {
+			foundEntry = entry
+			foundPos = searchPos
+			foundSize = entrySize
+			break
+		}
+	}
+
+	if foundEntry != nil {
+		offset := errorPos - foundPos
+		glog.Infof("\n✓ SUCCESSFUL DECODE at position: %d", foundPos)
+		glog.Infof("  Offset from error position: -%d bytes", offset)
+		glog.Infof("  Entry Details:")
+		glog.Infof("    - Encoder Type: %d (%s)", foundEntry.EncoderType, foundEntry.EncoderType)
+		glog.Infof("    - Operation Type: %d", foundEntry.OperationType)
+		glog.Infof("    - Block Height: %d", foundEntry.BlockHeight)
+		glog.Infof("    - Flush ID: %s", foundEntry.FlushId)
+		glog.Infof("    - Entry Size: %d bytes", foundSize)
+
+		// Now read forward from the found position to see how many entries we can decode
+		glog.Infof("\nReading forward from recovered position...")
+		consumer.readForwardFromPosition(file, foundPos)
+	} else {
+		glog.Infof("\n✗ No valid entry found within %d bytes backward search", consumer.MaxRecoveryLookbackBytes)
+	}
+
+	glog.Infof("\n=== DIAGNOSTIC RECOVERY COMPLETE ===\n")
+}
+
+// readForwardFromPosition reads forward from a given position and attempts to decode entries
+func (consumer *StateSyncerConsumer) readForwardFromPosition(file *os.File, startPos int64) {
+	// Save the current position to restore later
+	originalPos, _ := file.Seek(0, io.SeekCurrent)
+	defer file.Seek(originalPos, io.SeekStart)
+
+	// Seek to the start position
+	if _, err := file.Seek(startPos, io.SeekStart); err != nil {
+		glog.Infof("Error seeking to start position: %v", err)
+		return
+	}
+
+	// Create a new reader for forward reading
+	forwardReader := bufio.NewReader(file)
+	entryNum := 0
+	consecutiveErrors := 0
+	maxConsecutiveErrors := 3
+
+	for consecutiveErrors < maxConsecutiveErrors {
+		currentPos, _ := file.Seek(0, io.SeekCurrent)
+
+		// Try to read the next entry
+		entry, success, entrySize, err := tryDecodeAtPositionWithReader(file, forwardReader, currentPos)
+
+		if !success || err != nil {
+			consecutiveErrors++
+			if err != nil {
+				glog.Infof("Entry #%d at position %d: DECODE ERROR - %v", entryNum+1, currentPos, err)
+			}
+			continue
+		}
+
+		consecutiveErrors = 0
+		entryNum++
+		glog.Infof("Entry #%d at position %d: EncoderType=%d, OpType=%d, Height=%d, Size=%d bytes",
+			entryNum, currentPos, entry.EncoderType, entry.OperationType, entry.BlockHeight, entrySize)
+
+		// Stop after printing 50 entries to avoid spam
+		if entryNum >= 50 {
+			glog.Infof("... (stopping after %d successful entries)", entryNum)
+			break
+		}
+	}
+
+	if entryNum == 0 {
+		glog.Infof("No entries could be decoded forward from position %d", startPos)
+	}
 }
 
 // retrieveNextEntry reads the next StateChangeEntry bytes from the state change file and decode them.
@@ -487,7 +624,7 @@ func (consumer *StateSyncerConsumer) retrieveNextEntry(isMempool bool) (*lib.Sta
 		// Read the first mempool entry to see if the flush ID has changed.
 		firstEntryReader := bufio.NewReader(consumer.StateChangeMempoolFirstEntryFile)
 
-		mempoolFirstEntry, eof, err := consumer.readAndDecodeNextEntry(firstEntryReader, consumer.StateChangeMempoolFirstEntryFile)
+		mempoolFirstEntry, eof, err := consumer.readAndDecodeNextEntry(firstEntryReader, consumer.StateChangeMempoolFirstEntryFile, true)
 		if eof {
 			return nil, true, nil
 		} else if err != nil {
@@ -508,7 +645,7 @@ func (consumer *StateSyncerConsumer) retrieveNextEntry(isMempool bool) (*lib.Sta
 			reader = consumer.StateChangeMempoolFileReader
 		}
 	}
-	stateChangeEntry, eof, err := consumer.readAndDecodeNextEntry(reader, file)
+	stateChangeEntry, eof, err := consumer.readAndDecodeNextEntry(reader, file, isMempool)
 	if eof {
 		return nil, true, nil
 	} else if err != nil {
@@ -693,7 +830,7 @@ func (consumer *StateSyncerConsumer) peekNextStateChangeEntry(reader *bufio.Read
 	currentPos, err := file.Seek(0, io.SeekCurrent)
 
 	// Read the next entry from the state change file.
-	stateChangeEntry, _, err := consumer.readAndDecodeNextEntry(reader, file)
+	stateChangeEntry, _, err := consumer.readAndDecodeNextEntry(reader, file, true)
 	if err != nil {
 		return nil, errors.Wrapf(err, "consumer.peekNextStateChangeEntry: Error reading next entry")
 	}
@@ -786,7 +923,7 @@ func (consumer *StateSyncerConsumer) revertStoredMempoolTransactions() error {
 
 	for !fileEof {
 		var mempoolEntry *lib.StateChangeEntry
-		mempoolEntry, fileEof, err = consumer.readAndDecodeNextEntry(reader, file)
+		mempoolEntry, fileEof, err = consumer.readAndDecodeNextEntry(reader, file, true)
 		if fileEof {
 			break
 		} else if err != nil {
