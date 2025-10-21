@@ -95,6 +95,10 @@ type StateSyncerConsumer struct {
 	// Maximum number of bytes to search backward when attempting diagnostic recovery.
 	// Set to 0 to disable diagnostic recovery mode.
 	MaxRecoveryLookbackBytes uint64
+	// Search direction for diagnostic recovery: "backward", "forward", or "both"
+	RecoverySearchDirection string
+	// Minimum number of successful forward reads required to confirm a valid entry
+	MinSuccessfulForwardReads int
 }
 
 func (consumer *StateSyncerConsumer) InitializeAndRun(
@@ -148,6 +152,35 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 		glog.Infof("consumer.initialize: Diagnostic recovery mode enabled with max lookback of %d bytes", maxLookback)
 	} else {
 		consumer.MaxRecoveryLookbackBytes = 0
+	}
+
+	// Parse RECOVERY_SEARCH_DIRECTION environment variable (default: "backward")
+	searchDirection := os.Getenv("RECOVERY_SEARCH_DIRECTION")
+	if searchDirection == "" {
+		searchDirection = "backward"
+	}
+	// Validate search direction
+	if searchDirection != "backward" && searchDirection != "forward" && searchDirection != "both" {
+		return errors.New("consumer.initialize: RECOVERY_SEARCH_DIRECTION must be 'backward', 'forward', or 'both'")
+	}
+	consumer.RecoverySearchDirection = searchDirection
+	if consumer.MaxRecoveryLookbackBytes > 0 {
+		glog.Infof("consumer.initialize: Recovery search direction: %s", searchDirection)
+	}
+
+	// Parse MIN_SUCCESSFUL_FORWARD_READS environment variable (default: 3)
+	minForwardReadsStr := os.Getenv("MIN_SUCCESSFUL_FORWARD_READS")
+	if minForwardReadsStr != "" {
+		minForwardReads, err := strconv.Atoi(minForwardReadsStr)
+		if err != nil {
+			return errors.Wrapf(err, "consumer.initialize: Error parsing MIN_SUCCESSFUL_FORWARD_READS")
+		}
+		consumer.MinSuccessfulForwardReads = minForwardReads
+	} else {
+		consumer.MinSuccessfulForwardReads = 3
+	}
+	if consumer.MaxRecoveryLookbackBytes > 0 {
+		glog.Infof("consumer.initialize: Minimum successful forward reads required: %d", consumer.MinSuccessfulForwardReads)
 	}
 
 	stateChangeFilePath := filepath.Join(stateChangeDir, lib.StateChangeFileName)
@@ -489,7 +522,7 @@ func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader
 	return stateChangeEntry, false, err
 }
 
-// attemptDiagnosticRecovery attempts to find the correct file position by searching backward byte-by-byte
+// attemptDiagnosticRecovery attempts to find the correct file position by searching backward and/or forward byte-by-byte
 // when an encoder type mismatch error occurs. This is a diagnostic tool to help identify file corruption.
 func (consumer *StateSyncerConsumer) attemptDiagnosticRecovery(errorPos int64, file *os.File, reader *bufio.Reader, decodeErr error) {
 	// Check if this is an encoder type mismatch error
@@ -501,61 +534,149 @@ func (consumer *StateSyncerConsumer) attemptDiagnosticRecovery(errorPos int64, f
 	glog.Infof("\n=== DIAGNOSTIC RECOVERY MODE ACTIVATED ===")
 	glog.Infof("Error: %v", decodeErr)
 	glog.Infof("Current Position: %d bytes", errorPos)
-	glog.Infof("Max Lookback: %d bytes", consumer.MaxRecoveryLookbackBytes)
+	glog.Infof("Max Search Distance: %d bytes", consumer.MaxRecoveryLookbackBytes)
+	glog.Infof("Search Direction: %s", consumer.RecoverySearchDirection)
 	glog.Infof("Entry Type: Committed (NOT Mempool)")
 	glog.Infof("Initial Sync Mode: %v", consumer.SyncingFromBeginning)
-	glog.Infof("\nSearching backward...")
-
-	// Calculate how far back we can safely search
-	maxSearchPos := errorPos - int64(consumer.MaxRecoveryLookbackBytes)
-	if maxSearchPos < 0 {
-		maxSearchPos = 0
-	}
+	glog.Infof("Minimum Successful Forward Reads: %d", consumer.MinSuccessfulForwardReads)
 
 	var foundEntry *lib.StateChangeEntry
 	var foundPos int64
 	var foundSize uint64
+	var successfulForwardReads int
 
-	// Search backward byte by byte
-	for searchPos := errorPos - 1; searchPos >= maxSearchPos; searchPos-- {
-		// Print progress every 1000 bytes
-		if (errorPos-searchPos)%1000 == 0 {
-			glog.Infof("Searched back %d bytes...", errorPos-searchPos)
-		}
+	// Search based on configured direction
+	if consumer.RecoverySearchDirection == "backward" || consumer.RecoverySearchDirection == "both" {
+		glog.Infof("\nSearching backward...")
+		foundEntry, foundPos, foundSize, successfulForwardReads = consumer.searchBackwardForValidEntry(file, errorPos)
+	}
 
-		// Try to decode at this position
-		entry, success, entrySize, _ := tryDecodeAtPosition(file, searchPos)
-		if success && entry != nil {
-			foundEntry = entry
-			foundPos = searchPos
-			foundSize = entrySize
-			break
-		}
+	// If backward search didn't find a good entry, try forward (if configured)
+	if foundEntry == nil && (consumer.RecoverySearchDirection == "forward" || consumer.RecoverySearchDirection == "both") {
+		glog.Infof("\nSearching forward...")
+		foundEntry, foundPos, foundSize, successfulForwardReads = consumer.searchForwardForValidEntry(file, errorPos)
 	}
 
 	if foundEntry != nil {
 		offset := errorPos - foundPos
+		direction := "backward"
+		if offset < 0 {
+			direction = "forward"
+			offset = -offset
+		}
 		glog.Infof("\n✓ SUCCESSFUL DECODE at position: %d", foundPos)
-		glog.Infof("  Offset from error position: -%d bytes", offset)
+		glog.Infof("  Offset from error position: %d bytes %s", offset, direction)
+		glog.Infof("  Successful forward reads: %d entries", successfulForwardReads)
 		glog.Infof("  Entry Details:")
 		glog.Infof("    - Encoder Type: %d (%s)", foundEntry.EncoderType, foundEntry.EncoderType)
 		glog.Infof("    - Operation Type: %d", foundEntry.OperationType)
 		glog.Infof("    - Block Height: %d", foundEntry.BlockHeight)
 		glog.Infof("    - Flush ID: %s", foundEntry.FlushId)
 		glog.Infof("    - Entry Size: %d bytes", foundSize)
-
-		// Now read forward from the found position to see how many entries we can decode
-		glog.Infof("\nReading forward from recovered position...")
-		consumer.readForwardFromPosition(file, foundPos)
 	} else {
-		glog.Infof("\n✗ No valid entry found within %d bytes backward search", consumer.MaxRecoveryLookbackBytes)
+		glog.Infof("\n✗ No valid entry found within %d bytes search distance", consumer.MaxRecoveryLookbackBytes)
 	}
 
 	glog.Infof("\n=== DIAGNOSTIC RECOVERY COMPLETE ===\n")
 }
 
+// searchBackwardForValidEntry searches backward from errorPos to find a valid entry that can also be read forward
+// Returns: entry, position, size, successful forward reads count
+func (consumer *StateSyncerConsumer) searchBackwardForValidEntry(file *os.File, errorPos int64) (*lib.StateChangeEntry, int64, uint64, int) {
+	// Calculate how far back we can safely search
+	maxSearchPos := errorPos - int64(consumer.MaxRecoveryLookbackBytes)
+	if maxSearchPos < 0 {
+		maxSearchPos = 0
+	}
+
+	candidatesChecked := 0
+
+	// Search backward byte by byte
+	for searchPos := errorPos - 1; searchPos >= maxSearchPos; searchPos-- {
+		// Print progress every 1000 bytes
+		if (errorPos-searchPos)%1000 == 0 {
+			glog.Infof("Searched back %d bytes... (checked %d candidates)", errorPos-searchPos, candidatesChecked)
+		}
+
+		// Try to decode at this position
+		entry, success, entrySize, _ := tryDecodeAtPosition(file, searchPos)
+		if success && entry != nil {
+			candidatesChecked++
+
+			// Verify this entry by trying to read forward
+			glog.Infof("\nCandidate found at position %d (-%d bytes), verifying by reading forward...",
+				searchPos, errorPos-searchPos)
+			successfulReads := consumer.readForwardFromPosition(file, searchPos)
+
+			// Check if we have enough successful forward reads
+			if successfulReads >= consumer.MinSuccessfulForwardReads {
+				glog.Infof("✓ Candidate validated with %d successful forward reads", successfulReads)
+				return entry, searchPos, entrySize, successfulReads
+			} else {
+				glog.Infof("✗ Candidate rejected: only %d successful forward reads (need %d), continuing search...",
+					successfulReads, consumer.MinSuccessfulForwardReads)
+			}
+		}
+	}
+
+	glog.Infof("Backward search complete. Checked %d candidates, none validated.", candidatesChecked)
+	return nil, 0, 0, 0
+}
+
+// searchForwardForValidEntry searches forward from errorPos to find a valid entry that can also be read forward
+// Returns: entry, position, size, successful forward reads count
+func (consumer *StateSyncerConsumer) searchForwardForValidEntry(file *os.File, errorPos int64) (*lib.StateChangeEntry, int64, uint64, int) {
+	// Calculate how far forward we can safely search
+	maxSearchPos := errorPos + int64(consumer.MaxRecoveryLookbackBytes)
+
+	// Get file size to avoid searching beyond EOF
+	fileInfo, err := file.Stat()
+	if err != nil {
+		glog.Infof("Error getting file size: %v", err)
+		return nil, 0, 0, 0
+	}
+	fileSize := fileInfo.Size()
+	if maxSearchPos > fileSize {
+		maxSearchPos = fileSize
+	}
+
+	candidatesChecked := 0
+
+	// Search forward byte by byte
+	for searchPos := errorPos + 1; searchPos < maxSearchPos; searchPos++ {
+		// Print progress every 1000 bytes
+		if (searchPos-errorPos)%1000 == 0 {
+			glog.Infof("Searched forward %d bytes... (checked %d candidates)", searchPos-errorPos, candidatesChecked)
+		}
+
+		// Try to decode at this position
+		entry, success, entrySize, _ := tryDecodeAtPosition(file, searchPos)
+		if success && entry != nil {
+			candidatesChecked++
+
+			// Verify this entry by trying to read forward
+			glog.Infof("\nCandidate found at position %d (+%d bytes), verifying by reading forward...",
+				searchPos, searchPos-errorPos)
+			successfulReads := consumer.readForwardFromPosition(file, searchPos)
+
+			// Check if we have enough successful forward reads
+			if successfulReads >= consumer.MinSuccessfulForwardReads {
+				glog.Infof("✓ Candidate validated with %d successful forward reads", successfulReads)
+				return entry, searchPos, entrySize, successfulReads
+			} else {
+				glog.Infof("✗ Candidate rejected: only %d successful forward reads (need %d), continuing search...",
+					successfulReads, consumer.MinSuccessfulForwardReads)
+			}
+		}
+	}
+
+	glog.Infof("Forward search complete. Checked %d candidates, none validated.", candidatesChecked)
+	return nil, 0, 0, 0
+}
+
 // readForwardFromPosition reads forward from a given position and attempts to decode entries
-func (consumer *StateSyncerConsumer) readForwardFromPosition(file *os.File, startPos int64) {
+// Returns the number of successfully decoded entries
+func (consumer *StateSyncerConsumer) readForwardFromPosition(file *os.File, startPos int64) int {
 	// Save the current position to restore later
 	originalPos, _ := file.Seek(0, io.SeekCurrent)
 	defer file.Seek(originalPos, io.SeekStart)
@@ -563,7 +684,7 @@ func (consumer *StateSyncerConsumer) readForwardFromPosition(file *os.File, star
 	// Seek to the start position
 	if _, err := file.Seek(startPos, io.SeekStart); err != nil {
 		glog.Infof("Error seeking to start position: %v", err)
-		return
+		return 0
 	}
 
 	// Create a new reader for forward reading
@@ -601,6 +722,7 @@ func (consumer *StateSyncerConsumer) readForwardFromPosition(file *os.File, star
 	if entryNum == 0 {
 		glog.Infof("No entries could be decoded forward from position %d", startPos)
 	}
+	return entryNum
 }
 
 // retrieveNextEntry reads the next StateChangeEntry bytes from the state change file and decode them.

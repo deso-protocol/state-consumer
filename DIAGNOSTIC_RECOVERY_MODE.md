@@ -8,24 +8,51 @@ A new diagnostic mode has been implemented to help identify and diagnose file po
 
 When the consumer encounters an "encoder type doesn't match" error during committed entry decoding, it can automatically:
 
-1. **Search backward byte-by-byte** from the error position to find a valid StateChangeEntry
-2. **Report diagnostic information** about the found entry and the offset from the error position
-3. **Read forward** from the recovered position to show subsequent entries
-4. **Provide detailed logs** to help understand the extent of corruption
+1. **Search backward and/or forward byte-by-byte** from the error position to find valid StateChangeEntry candidates
+2. **Validate each candidate** by attempting to read forward and requiring a minimum number of successful reads
+3. **Continue searching if validation fails** - if a candidate doesn't pass forward reading validation, the search continues
+4. **Report diagnostic information** about the found entry, validation results, and the offset from the error position
+5. **Provide detailed logs** to help understand the extent of corruption
 
 ## Configuration
 
-### Environment Variable
+### Environment Variables
 
-Set the `MAX_RECOVERY_LOOKBACK_BYTES` environment variable to enable diagnostic mode:
+#### MAX_RECOVERY_LOOKBACK_BYTES (Required)
+Set this environment variable to enable diagnostic mode:
 
 ```bash
-export MAX_RECOVERY_LOOKBACK_BYTES=10000  # Search back up to 10KB
+export MAX_RECOVERY_LOOKBACK_BYTES=10000  # Search up to 10KB in each direction
 ```
 
-- **Value**: Number of bytes to search backward (must be > 0 to enable)
+- **Value**: Number of bytes to search (must be > 0 to enable)
 - **Default**: 0 (disabled)
 - **Recommended**: Start with 10000 (10KB) and increase if needed
+
+#### RECOVERY_SEARCH_DIRECTION (Optional)
+Controls which direction(s) to search:
+
+```bash
+export RECOVERY_SEARCH_DIRECTION=both  # Search backward, then forward if needed
+```
+
+- **Values**: `backward`, `forward`, or `both`
+- **Default**: `backward`
+- **Description**:
+  - `backward`: Search backward from error position (classic mode)
+  - `forward`: Search forward from error position
+  - `both`: Try backward first, then forward if backward finds nothing
+
+#### MIN_SUCCESSFUL_FORWARD_READS (Optional)
+Sets the minimum number of entries that must successfully decode forward to validate a candidate:
+
+```bash
+export MIN_SUCCESSFUL_FORWARD_READS=5  # Require 5 successful forward reads
+```
+
+- **Value**: Number of successful forward reads required (integer)
+- **Default**: 3
+- **Description**: When a candidate entry is found, the diagnostic tool reads forward from that position. The candidate is only accepted if at least this many entries decode successfully. This prevents false positives where random bytes happen to decode as an entry but aren't actually valid.
 
 ### Activation Conditions
 
@@ -37,11 +64,24 @@ Diagnostic mode ONLY activates when:
 
 ## Example Usage
 
+### Basic Usage (Backward Search Only)
 ```bash
-# Enable diagnostic recovery mode with 50KB lookback
 export MAX_RECOVERY_LOOKBACK_BYTES=50000
+./postgres-data-handler
+```
 
-# Run your postgres-data-handler
+### Search Both Directions
+```bash
+export MAX_RECOVERY_LOOKBACK_BYTES=100000
+export RECOVERY_SEARCH_DIRECTION=both
+export MIN_SUCCESSFUL_FORWARD_READS=5
+./postgres-data-handler
+```
+
+### Forward Search Only
+```bash
+export MAX_RECOVERY_LOOKBACK_BYTES=50000
+export RECOVERY_SEARCH_DIRECTION=forward
 ./postgres-data-handler
 ```
 
@@ -52,31 +92,39 @@ When diagnostic mode activates, you'll see output like:
 ```
 === DIAGNOSTIC RECOVERY MODE ACTIVATED ===
 Error: DecodeFromBytes: encoder type (11918) doesn't match the entry type (43)
-Current Position: 1234567 bytes
-Max Lookback: 10000 bytes
+Current Position: 781366087101 bytes
+Max Search Distance: 1000000000 bytes
+Search Direction: both
 Entry Type: Committed (NOT Mempool)
-Initial Sync Mode: true
+Initial Sync Mode: false
+Minimum Successful Forward Reads: 3
 
 Searching backward...
-Searched back 1000 bytes...
-Searched back 2000 bytes...
-Searched back 3000 bytes...
+Searched back 1000 bytes... (checked 0 candidates)
+Searched back 2000 bytes... (checked 1 candidates)
 
-✓ SUCCESSFUL DECODE at position: 1231245
-  Offset from error position: -3322 bytes
+Candidate found at position 781366085000 (-2101 bytes), verifying by reading forward...
+Entry #1 at position 781366085000: EncoderType=16, OpType=2, Height=12345, Size=2048 bytes
+Entry #2 at position 781366087048: EncoderType=21, OpType=2, Height=12346, Size=512 bytes
+✗ Candidate rejected: only 2 successful forward reads (need 3), continuing search...
+
+Candidate found at position 781366082500 (-4601 bytes), verifying by reading forward...
+Entry #1 at position 781366082500: EncoderType=43, OpType=2, Height=12340, Size=1024 bytes
+Entry #2 at position 781366083524: EncoderType=16, OpType=2, Height=12341, Size=2048 bytes
+Entry #3 at position 781366085572: EncoderType=21, OpType=2, Height=12342, Size=512 bytes
+Entry #4 at position 781366086084: EncoderType=16, OpType=2, Height=12343, Size=1536 bytes
+... (up to 50 entries shown)
+✓ Candidate validated with 50 successful forward reads
+
+✓ SUCCESSFUL DECODE at position: 781366082500
+  Offset from error position: 4601 bytes backward
+  Successful forward reads: 50 entries
   Entry Details:
     - Encoder Type: 43 (EncoderTypeBlock)
     - Operation Type: 2
-    - Block Height: 12345
+    - Block Height: 12340
     - Flush ID: 550e8400-e29b-41d4-a716-446655440000
     - Entry Size: 1024 bytes
-
-Reading forward from recovered position...
-Entry #1 at position 1232269: EncoderType=43, OpType=2, Height=12345, Size=1024 bytes
-Entry #2 at position 1233293: EncoderType=16, OpType=2, Height=12346, Size=2048 bytes
-Entry #3 at position 1235341: EncoderType=21, OpType=2, Height=12347, Size=512 bytes
-...
-(stopping after 50 successful entries)
 
 === DIAGNOSTIC RECOVERY COMPLETE ===
 ```
