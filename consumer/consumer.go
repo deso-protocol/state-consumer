@@ -714,7 +714,7 @@ func (consumer *StateSyncerConsumer) readForwardFromPosition(file *os.File, star
 
 		consecutiveErrors = 0
 		entryNum++
-		
+
 		// Count this entry if it's past the threshold (or if threshold is disabled)
 		if countThreshold < 0 || currentPos >= countThreshold {
 			entriesCountedPastThreshold++
@@ -740,7 +740,7 @@ func (consumer *StateSyncerConsumer) readForwardFromPosition(file *os.File, star
 			glog.Infof("... (total of %d successful entries decoded)", entryNum)
 		}
 	}
-	
+
 	return entriesCountedPastThreshold
 }
 
