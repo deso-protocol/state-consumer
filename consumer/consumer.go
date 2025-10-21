@@ -604,16 +604,18 @@ func (consumer *StateSyncerConsumer) searchBackwardForValidEntry(file *os.File, 
 			candidatesChecked++
 
 			// Verify this entry by trying to read forward
+			// For backward search, only count entries that are PAST the original error position
 			glog.Infof("\nCandidate found at position %d (-%d bytes), verifying by reading forward...",
 				searchPos, errorPos-searchPos)
-			successfulReads := consumer.readForwardFromPosition(file, searchPos)
+			glog.Infof("Will only count entries at positions >= %d (error position)", errorPos)
+			successfulReads := consumer.readForwardFromPosition(file, searchPos, errorPos)
 
-			// Check if we have enough successful forward reads
+			// Check if we have enough successful forward reads past the error position
 			if successfulReads >= consumer.MinSuccessfulForwardReads {
-				glog.Infof("✓ Candidate validated with %d successful forward reads", successfulReads)
+				glog.Infof("✓ Candidate validated with %d successful forward reads past error position", successfulReads)
 				return entry, searchPos, entrySize, successfulReads
 			} else {
-				glog.Infof("✗ Candidate rejected: only %d successful forward reads (need %d), continuing search...",
+				glog.Infof("✗ Candidate rejected: only %d successful forward reads past error position (need %d), continuing search...",
 					successfulReads, consumer.MinSuccessfulForwardReads)
 			}
 		}
@@ -655,9 +657,10 @@ func (consumer *StateSyncerConsumer) searchForwardForValidEntry(file *os.File, e
 			candidatesChecked++
 
 			// Verify this entry by trying to read forward
+			// For forward search, count all entries (no threshold filtering)
 			glog.Infof("\nCandidate found at position %d (+%d bytes), verifying by reading forward...",
 				searchPos, searchPos-errorPos)
-			successfulReads := consumer.readForwardFromPosition(file, searchPos)
+			successfulReads := consumer.readForwardFromPosition(file, searchPos, -1)
 
 			// Check if we have enough successful forward reads
 			if successfulReads >= consumer.MinSuccessfulForwardReads {
@@ -675,8 +678,9 @@ func (consumer *StateSyncerConsumer) searchForwardForValidEntry(file *os.File, e
 }
 
 // readForwardFromPosition reads forward from a given position and attempts to decode entries
-// Returns the number of successfully decoded entries
-func (consumer *StateSyncerConsumer) readForwardFromPosition(file *os.File, startPos int64) int {
+// If countThreshold >= 0, only counts entries at positions >= countThreshold
+// Returns the number of successfully decoded entries (respecting threshold if set)
+func (consumer *StateSyncerConsumer) readForwardFromPosition(file *os.File, startPos int64, countThreshold int64) int {
 	// Save the current position to restore later
 	originalPos, _ := file.Seek(0, io.SeekCurrent)
 	defer file.Seek(originalPos, io.SeekStart)
@@ -690,6 +694,7 @@ func (consumer *StateSyncerConsumer) readForwardFromPosition(file *os.File, star
 	// Create a new reader for forward reading
 	forwardReader := bufio.NewReader(file)
 	entryNum := 0
+	entriesCountedPastThreshold := 0
 	consecutiveErrors := 0
 	maxConsecutiveErrors := 3
 
@@ -709,20 +714,34 @@ func (consumer *StateSyncerConsumer) readForwardFromPosition(file *os.File, star
 
 		consecutiveErrors = 0
 		entryNum++
-		glog.Infof("Entry #%d at position %d: EncoderType=%d, OpType=%d, Height=%d, Size=%d bytes",
-			entryNum, currentPos, entry.EncoderType, entry.OperationType, entry.BlockHeight, entrySize)
+		
+		// Count this entry if it's past the threshold (or if threshold is disabled)
+		if countThreshold < 0 || currentPos >= countThreshold {
+			entriesCountedPastThreshold++
+		}
 
-		// Stop after printing 50 entries to avoid spam
-		if entryNum >= 50 {
-			glog.Infof("... (stopping after %d successful entries)", entryNum)
-			break
+		// Print every entry for the first 100, then every 100th entry to avoid excessive spam
+		if entryNum <= 100 || entryNum%100 == 0 {
+			marker := ""
+			if countThreshold >= 0 && currentPos >= countThreshold {
+				marker = " [PAST ERROR POSITION]"
+			}
+			glog.Infof("Entry #%d at position %d: EncoderType=%d, OpType=%d, Height=%d, Size=%d bytes%s",
+				entryNum, currentPos, entry.EncoderType, entry.OperationType, entry.BlockHeight, entrySize, marker)
 		}
 	}
 
 	if entryNum == 0 {
 		glog.Infof("No entries could be decoded forward from position %d", startPos)
+	} else if entryNum > 100 {
+		if countThreshold >= 0 {
+			glog.Infof("... (total of %d entries decoded, %d past error position)", entryNum, entriesCountedPastThreshold)
+		} else {
+			glog.Infof("... (total of %d successful entries decoded)", entryNum)
+		}
 	}
-	return entryNum
+	
+	return entriesCountedPastThreshold
 }
 
 // retrieveNextEntry reads the next StateChangeEntry bytes from the state change file and decode them.

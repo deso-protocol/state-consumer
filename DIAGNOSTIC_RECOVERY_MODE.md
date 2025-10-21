@@ -109,16 +109,22 @@ Entry #2 at position 781366087048: EncoderType=21, OpType=2, Height=12346, Size=
 ✗ Candidate rejected: only 2 successful forward reads (need 3), continuing search...
 
 Candidate found at position 781366082500 (-4601 bytes), verifying by reading forward...
+Will only count entries at positions >= 781366087101 (error position)
 Entry #1 at position 781366082500: EncoderType=43, OpType=2, Height=12340, Size=1024 bytes
 Entry #2 at position 781366083524: EncoderType=16, OpType=2, Height=12341, Size=2048 bytes
 Entry #3 at position 781366085572: EncoderType=21, OpType=2, Height=12342, Size=512 bytes
 Entry #4 at position 781366086084: EncoderType=16, OpType=2, Height=12343, Size=1536 bytes
-... (up to 50 entries shown)
-✓ Candidate validated with 50 successful forward reads
+Entry #5 at position 781366087101: EncoderType=43, OpType=2, Height=12344, Size=2048 bytes [PAST ERROR POSITION]
+Entry #6 at position 781366089149: EncoderType=21, OpType=2, Height=12345, Size=512 bytes [PAST ERROR POSITION]
+... (first 100 entries printed, then every 100th entry)
+Entry #200 at position 781366890044: EncoderType=21, OpType=2, Height=12540, Size=512 bytes [PAST ERROR POSITION]
+Entry #300 at position 781367210515: EncoderType=43, OpType=2, Height=12640, Size=1024 bytes [PAST ERROR POSITION]
+... (total of 8432 entries decoded, 8427 past error position)
+✓ Candidate validated with 8427 successful forward reads past error position
 
 ✓ SUCCESSFUL DECODE at position: 781366082500
   Offset from error position: 4601 bytes backward
-  Successful forward reads: 50 entries
+  Successful forward reads: 8427 entries (past error position)
   Entry Details:
     - Encoder Type: 43 (EncoderTypeBlock)
     - Operation Type: 2
@@ -162,10 +168,15 @@ Entry #4 at position 781366086084: EncoderType=16, OpType=2, Height=12343, Size=
 - Similar to above but uses an existing reader for sequential reading
 - More efficient for forward reading
 
-#### `readForwardFromPosition(file, startPos)`
+#### `readForwardFromPosition(file, startPos, countThreshold)`
 - Reads forward from a given position
-- Decodes and logs up to 50 successive entries
-- Stops after 3 consecutive decode errors
+- If `countThreshold >= 0`, only counts entries at positions >= countThreshold (used for backward search validation)
+- If `countThreshold < 0`, counts all entries (used for forward search validation)
+- Decodes and logs successive entries until it hits 3 consecutive decode errors
+- Prints first 100 entries individually, then every 100th entry to avoid excessive spam
+- Entries past the threshold are marked with `[PAST ERROR POSITION]` in logs
+- Returns the number of successfully decoded entries past the threshold
+- No upper limit on the number of entries it can validate
 
 ## Important Notes
 
