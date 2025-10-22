@@ -758,6 +758,10 @@ func (consumer *StateSyncerConsumer) searchBackwardForValidEntry(file *os.File, 
 
 	candidatesChecked := 0
 
+	// Get all migration heights for testing
+	migrationHeights := GetMigrationHeights(consumer.Params)
+	glog.Infof("Testing %d migration heights at each position", len(migrationHeights))
+
 	// Search backward byte by byte
 	for searchPos := errorPos - 1; searchPos >= maxSearchPos; searchPos-- {
 		// Print progress every 1000 bytes
@@ -765,21 +769,32 @@ func (consumer *StateSyncerConsumer) searchBackwardForValidEntry(file *os.File, 
 			glog.Infof("Searched back %d bytes... (checked %d candidates)", errorPos-searchPos, candidatesChecked)
 		}
 
-		// Try to decode at this position
-		entry, success, entrySize, _ := tryDecodeAtPosition(file, searchPos)
+		// Try to decode at this position with ALL migration heights
+		entry, success, workingHeight, entrySize, _ := tryDecodeAtPositionWithAllHeights(file, searchPos, migrationHeights)
 		if success && entry != nil {
 			candidatesChecked++
 
+			// Find the migration info for logging
+			var migrationName string
+			for _, mh := range migrationHeights {
+				if mh.Height == workingHeight {
+					migrationName = mh.Name
+					break
+				}
+			}
+
 			// Verify this entry by trying to read forward
 			// For backward search, only count entries that are PAST the original error position
-			glog.Infof("\nCandidate found at position %d (-%d bytes), verifying by reading forward...",
-				searchPos, errorPos-searchPos)
+			glog.Infof("\nCandidate found at position %d (-%d bytes) using migration height %d (%s)",
+				searchPos, errorPos-searchPos, workingHeight, migrationName)
+			glog.Infof("Verifying by reading forward...")
 			glog.Infof("Will only count entries at positions >= %d (error position)", errorPos)
 			successfulReads := consumer.readForwardFromPosition(file, searchPos, errorPos)
 
 			// Check if we have enough successful forward reads past the error position
 			if successfulReads >= consumer.MinSuccessfulForwardReads {
 				glog.Infof("✓ Candidate validated with %d successful forward reads past error position", successfulReads)
+				glog.Infof("✓ Working migration height: %d (%s)", workingHeight, migrationName)
 				return entry, searchPos, entrySize, successfulReads
 			} else {
 				glog.Infof("✗ Candidate rejected: only %d successful forward reads past error position (need %d), continuing search...",
@@ -811,6 +826,9 @@ func (consumer *StateSyncerConsumer) searchForwardForValidEntry(file *os.File, e
 
 	candidatesChecked := 0
 
+	// Get all migration heights for testing
+	migrationHeights := GetMigrationHeights(consumer.Params)
+
 	// Search forward byte by byte
 	for searchPos := errorPos + 1; searchPos < maxSearchPos; searchPos++ {
 		// Print progress every 1000 bytes
@@ -818,20 +836,31 @@ func (consumer *StateSyncerConsumer) searchForwardForValidEntry(file *os.File, e
 			glog.Infof("Searched forward %d bytes... (checked %d candidates)", searchPos-errorPos, candidatesChecked)
 		}
 
-		// Try to decode at this position
-		entry, success, entrySize, _ := tryDecodeAtPosition(file, searchPos)
+		// Try to decode at this position with ALL migration heights
+		entry, success, workingHeight, entrySize, _ := tryDecodeAtPositionWithAllHeights(file, searchPos, migrationHeights)
 		if success && entry != nil {
 			candidatesChecked++
 
+			// Find the migration info for logging
+			var migrationName string
+			for _, mh := range migrationHeights {
+				if mh.Height == workingHeight {
+					migrationName = mh.Name
+					break
+				}
+			}
+
 			// Verify this entry by trying to read forward
 			// For forward search, count all entries (no threshold filtering)
-			glog.Infof("\nCandidate found at position %d (+%d bytes), verifying by reading forward...",
-				searchPos, searchPos-errorPos)
+			glog.Infof("\nCandidate found at position %d (+%d bytes) using migration height %d (%s)",
+				searchPos, searchPos-errorPos, workingHeight, migrationName)
+			glog.Infof("Verifying by reading forward...")
 			successfulReads := consumer.readForwardFromPosition(file, searchPos, -1)
 
 			// Check if we have enough successful forward reads
 			if successfulReads >= consumer.MinSuccessfulForwardReads {
 				glog.Infof("✓ Candidate validated with %d successful forward reads", successfulReads)
+				glog.Infof("✓ Working migration height: %d (%s)", workingHeight, migrationName)
 				return entry, searchPos, entrySize, successfulReads
 			} else {
 				glog.Infof("✗ Candidate rejected: only %d successful forward reads (need %d), continuing search...",

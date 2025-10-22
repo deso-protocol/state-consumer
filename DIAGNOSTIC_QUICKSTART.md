@@ -6,17 +6,102 @@ Your postgres-data-handler is crash looping with:
 encoder type (11918) doesn't match the entry type (43)
 ```
 
-## Two Diagnostic Tools Available
+## 🚀 NEW: Combined Diagnostic Approach
 
-### 🔬 Migration Height Diagnostic (Try This First!)
-Tests if the issue is caused by migration/version mismatches. **Fast and non-intrusive.**
+**The byte-position diagnostic now tests ALL migration heights at each position!**
 
-### 🔍 Byte-Position Diagnostic
-Searches for file corruption by testing different byte positions. **Slower but thorough.**
+This provides the most comprehensive corruption analysis possible by finding:
+- Byte-level misalignment
+- Migration height mismatches
+- Both issues simultaneously
+
+## Three Diagnostic Tools Available
+
+### 🔬 1. Migration Height Diagnostic (Try This First!)
+Tests if the issue is caused by migration/version mismatches at the current position. **Fast and non-intrusive.**
+
+### 🔍 2. Byte-Position Diagnostic (Enhanced!)
+Searches for file corruption AND tests all migration heights at each byte position. **Thorough and intelligent.**
+
+### ⚡ 3. Combined Diagnostic (Recommended)
+Enable both diagnostics together for maximum diagnostic power.
 
 ---
 
-## Option 1: Migration Height Diagnostic (RECOMMENDED FIRST)
+## Option 1: Combined Diagnostic (RECOMMENDED)
+
+### Step 1: Enable Both Diagnostics
+```yaml
+environment:
+  # Phase 1: Quick migration test at current position
+  - ENABLE_MIGRATION_HEIGHT_DIAGNOSTIC=true
+  
+  # Phase 2: Byte-position search with migration testing
+  - MAX_RECOVERY_LOOKBACK_BYTES=100000
+  - RECOVERY_SEARCH_DIRECTION=both
+  - MIN_SUCCESSFUL_FORWARD_READS=3
+```
+
+Or:
+```bash
+export ENABLE_MIGRATION_HEIGHT_DIAGNOSTIC=true
+export MAX_RECOVERY_LOOKBACK_BYTES=100000
+export RECOVERY_SEARCH_DIRECTION=both
+export MIN_SUCCESSFUL_FORWARD_READS=3
+./postgres-data-handler
+```
+
+### Step 2: Review Output
+
+**Phase 1 - Migration Test at Current Position:**
+```
+========================================
+MIGRATION HEIGHT DIAGNOSTIC MODE
+========================================
+Error: encoder type (11918) doesn't match entry type (43)
+✗ NO successful heights found at current position
+```
+
+**Phase 2 - Combined Byte + Migration Search:**
+```
+=== DIAGNOSTIC RECOVERY MODE ACTIVATED ===
+Testing 5 migration heights at each position
+
+Searched back 3000 bytes... (checked 1 candidates)
+
+Candidate found at position 781363084099 (-3002 bytes) using migration height 1113866 (ProofOfStake1StateSetupMigration)
+Verifying by reading forward...
+✓ Candidate validated with 15 successful forward reads past error position
+✓ Working migration height: 1113866 (ProofOfStake1StateSetupMigration)
+
+✓ SUCCESSFUL DECODE at position: 781363084099
+  Offset from error position: 3002 bytes backward
+  Working migration height: 1113866 (ProofOfStake1StateSetupMigration)
+  Entry Details:
+    - Encoder Type: 21 (EncoderTypeProfileEntry)
+    - Block Height: 1113900
+========================================
+```
+
+### Step 3: Interpret Results
+
+#### Scenario A: Migration height found at current position (Phase 1 success)
+- **One height works**: Version mismatch → Match core versions or resync
+- **Multiple heights work**: Not migration-dependent → Likely byte misalignment
+- **Action**: Check if core library version matches expected migration
+
+#### Scenario B: No height works at current position, but byte-position search finds entry (Phase 2 success)
+- **Found with migration height X**: File pointer misaligned + written at migration X
+- **Found with current height**: Just byte misalignment, not migration issue
+- **Action**: Note position offset and working migration height
+
+#### Scenario C: Both diagnostics fail
+- **Severe corruption or unknown migration**
+- **Action**: Full resync required
+
+---
+
+## Option 2: Migration Height Diagnostic Only (Fast Check)
 
 ### Step 1: Enable Migration Height Diagnostic
 ```yaml
@@ -221,5 +306,6 @@ After diagnostics, you'll need to:
 
 ## Documentation
 
+- [COMBINED_DIAGNOSTIC.md](./COMBINED_DIAGNOSTIC.md) - **NEW!** Combined migration + byte-position details
 - [MIGRATION_HEIGHT_DIAGNOSTIC.md](./MIGRATION_HEIGHT_DIAGNOSTIC.md) - Migration height diagnostic details
 - [DIAGNOSTIC_RECOVERY_MODE.md](./DIAGNOSTIC_RECOVERY_MODE.md) - Byte-position diagnostic details

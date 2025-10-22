@@ -1,9 +1,11 @@
 package consumer
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/deso-protocol/core/lib"
@@ -236,4 +238,73 @@ func decodeFromBytesWithCustomHeight(encoder lib.DeSoEncoder, rr io.Reader, bloc
 		return false, err
 	}
 	return false, nil
+}
+
+// tryDecodeAtPositionWithAllHeights attempts to decode at a position using all migration heights
+// Returns the entry, success status, migration height that worked, bytes read, and any error
+func tryDecodeAtPositionWithAllHeights(file *os.File, position int64, migrationHeights []MigrationHeightInfo) (*lib.StateChangeEntry, bool, uint64, uint64, error) {
+	// Try each migration height
+	for _, migrationInfo := range migrationHeights {
+		entry, success, bytesRead, err := tryDecodeAtPositionWithHeight(file, position, migrationInfo.Height)
+		if success {
+			return entry, true, migrationInfo.Height, bytesRead, nil
+		}
+		// If we got an error but it's not about EOF/unexpected EOF, continue trying other heights
+		if err != nil && !strings.Contains(err.Error(), "EOF") {
+			continue
+		}
+	}
+	return nil, false, 0, 0, fmt.Errorf("no migration height could decode at position %d", position)
+}
+
+// tryDecodeAtPositionWithHeight attempts to decode at a specific position with a specific migration height
+func tryDecodeAtPositionWithHeight(file *os.File, position int64, blockHeight uint64) (*lib.StateChangeEntry, bool, uint64, error) {
+	// Save original position
+	originalPos, err := file.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return nil, false, 0, err
+	}
+	defer file.Seek(originalPos, io.SeekStart)
+
+	// Seek to the requested position
+	if _, err := file.Seek(position, io.SeekStart); err != nil {
+		return nil, false, 0, err
+	}
+
+	// Create a temporary reader
+	tempReader := bufio.NewReader(file)
+
+	// Try to read the entry size (varint)
+	entryByteSize, err := lib.ReadUvarint(tempReader)
+	if err != nil {
+		return nil, false, 0, err
+	}
+
+	// Sanity check on entry size
+	if entryByteSize == 0 || entryByteSize > 100*1024*1024 { // Max 100MB per entry
+		return nil, false, 0, fmt.Errorf("invalid entry size: %d", entryByteSize)
+	}
+
+	// Check if slice size is safe
+	if err := CheckSliceSize(int(entryByteSize)); err != nil {
+		return nil, false, 0, err
+	}
+
+	// Create a buffer to hold the entry
+	buffer := make([]byte, entryByteSize)
+	bytesRead, err := io.ReadFull(tempReader, buffer)
+	if err != nil {
+		return nil, false, 0, err
+	}
+	if bytesRead < int(entryByteSize) {
+		return nil, false, 0, fmt.Errorf("not enough bytes read: expected %d, got %d", entryByteSize, bytesRead)
+	}
+
+	// Try to decode with the specified block height
+	entry, success, err := tryDecodeWithHeight(buffer, blockHeight)
+	if !success || err != nil {
+		return nil, false, entryByteSize, err
+	}
+
+	return entry, true, entryByteSize, nil
 }
