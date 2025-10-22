@@ -2,6 +2,7 @@ package consumer
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -99,6 +100,12 @@ type StateSyncerConsumer struct {
 	RecoverySearchDirection string
 	// Minimum number of successful forward reads required to confirm a valid entry
 	MinSuccessfulForwardReads int
+	// Enable migration height diagnostic mode to test different block heights
+	EnableMigrationHeightDiagnostic bool
+	// DeSo network parameters for migration height diagnostic
+	Params *lib.DeSoParams
+	// Current block height being processed (for diagnostics)
+	BlockHeight uint64
 }
 
 func (consumer *StateSyncerConsumer) InitializeAndRun(
@@ -135,6 +142,7 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 	consumer.ThreadLimit = threadLimit
 	consumer.DataHandler = handler
 	lib.GlobalDeSoParams = *handler.GetParams()
+	consumer.Params = handler.GetParams()
 	consumer.DBBlockingChannel = make(chan bool, threadLimit)
 	consumer.AppliedMempoolEntries = make([]*lib.StateChangeEntry, 0)
 	consumer.CurrentMempoolEntryFlushId = uuid.Nil
@@ -181,6 +189,15 @@ func (consumer *StateSyncerConsumer) initialize(stateChangeDir string, consumerP
 	}
 	if consumer.MaxRecoveryLookbackBytes > 0 {
 		glog.Infof("consumer.initialize: Minimum successful forward reads required: %d", consumer.MinSuccessfulForwardReads)
+	}
+
+	// Parse ENABLE_MIGRATION_HEIGHT_DIAGNOSTIC environment variable
+	enableMigrationDiagStr := os.Getenv("ENABLE_MIGRATION_HEIGHT_DIAGNOSTIC")
+	if enableMigrationDiagStr != "" && (enableMigrationDiagStr == "true" || enableMigrationDiagStr == "1") {
+		consumer.EnableMigrationHeightDiagnostic = true
+		glog.Infof("consumer.initialize: Migration height diagnostic mode enabled")
+	} else {
+		consumer.EnableMigrationHeightDiagnostic = false
 	}
 
 	stateChangeFilePath := filepath.Join(stateChangeDir, lib.StateChangeFileName)
@@ -511,12 +528,23 @@ func (consumer *StateSyncerConsumer) readAndDecodeNextEntry(reader *bufio.Reader
 
 	}()
 	if err = DecodeEntry(stateChangeEntry, buffer); err != nil {
-		// Attempt diagnostic recovery if configured and not processing mempool
+		// NEW: Attempt migration height diagnostic first (separate from byte-position diagnostic)
+		if consumer.EnableMigrationHeightDiagnostic && !isMempool {
+			// Use the consumer's current block height as reference
+			consumer.attemptMigrationHeightDiagnostic(buffer, err, consumer.BlockHeight)
+		}
+
+		// EXISTING: Attempt byte-position diagnostic recovery if configured
 		if consumer.MaxRecoveryLookbackBytes > 0 && !isMempool {
 			consumer.attemptDiagnosticRecovery(currentPos, file, reader, err)
 		}
 		file.Seek(currentPos, io.SeekStart)
 		return nil, false, errors.Wrapf(err, "consumer.readAndDecodeNextEntry: Error decoding entry")
+	}
+
+	// Update block height for diagnostics
+	if stateChangeEntry.BlockHeight > 0 {
+		consumer.BlockHeight = stateChangeEntry.BlockHeight
 	}
 
 	return stateChangeEntry, false, err
@@ -533,8 +561,18 @@ func (consumer *StateSyncerConsumer) attemptDiagnosticRecovery(errorPos int64, f
 
 	glog.Infof("\n=== DIAGNOSTIC RECOVERY MODE ACTIVATED ===")
 	glog.Infof("Error: %v", decodeErr)
-	glog.Infof("Current Position: %d bytes", errorPos)
-	glog.Infof("Max Search Distance: %d bytes", consumer.MaxRecoveryLookbackBytes)
+	glog.Infof("Current Position: %d bytes (%.2f MB)", errorPos, float64(errorPos)/(1024*1024))
+
+	// Get file size and progress
+	if fileInfo, err := file.Stat(); err == nil {
+		fileSize := fileInfo.Size()
+		progress := float64(errorPos) / float64(fileSize) * 100
+		glog.Infof("File Size: %d bytes (%.2f MB)", fileSize, float64(fileSize)/(1024*1024))
+		glog.Infof("Progress: %.2f%% through file", progress)
+		glog.Infof("Remaining: %d bytes (%.2f MB)", fileSize-errorPos, float64(fileSize-errorPos)/(1024*1024))
+	}
+
+	glog.Infof("Max Search Distance: %d bytes (%.2f MB)", consumer.MaxRecoveryLookbackBytes, float64(consumer.MaxRecoveryLookbackBytes)/(1024*1024))
 	glog.Infof("Search Direction: %s", consumer.RecoverySearchDirection)
 	glog.Infof("Entry Type: Committed (NOT Mempool)")
 	glog.Infof("Initial Sync Mode: %v", consumer.SyncingFromBeginning)
@@ -575,9 +613,138 @@ func (consumer *StateSyncerConsumer) attemptDiagnosticRecovery(errorPos int64, f
 		glog.Infof("    - Entry Size: %d bytes", foundSize)
 	} else {
 		glog.Infof("\n✗ No valid entry found within %d bytes search distance", consumer.MaxRecoveryLookbackBytes)
+		glog.Infof("\n=== TROUBLESHOOTING RECOMMENDATIONS ===")
+		glog.Infof("1. Lower MIN_SUCCESSFUL_FORWARD_READS (currently: %d)", consumer.MinSuccessfulForwardReads)
+		glog.Infof("   Try: export MIN_SUCCESSFUL_FORWARD_READS=10")
+		glog.Infof("   Try: export MIN_SUCCESSFUL_FORWARD_READS=5")
+		glog.Infof("2. Try both search directions:")
+		glog.Infof("   export RECOVERY_SEARCH_DIRECTION=both")
+		glog.Infof("3. Increase search distance if needed:")
+		glog.Infof("   export MAX_RECOVERY_LOOKBACK_BYTES=5000000000  # 5GB")
+		glog.Infof("4. Check for version mismatch:")
+		glog.Infof("   - Encoder type %s is suspicious", strings.Split(errStr, "encoder type (")[1][:strings.Index(strings.Split(errStr, "encoder type (")[1], ")")])
+		glog.Infof("   - Ensure core and data-handler versions match")
+		glog.Infof("5. Consider full resync from trusted source")
 	}
 
 	glog.Infof("\n=== DIAGNOSTIC RECOVERY COMPLETE ===\n")
+
+	// Additional diagnostic: Try skip-ahead positions
+	consumer.trySkipAheadPositions(file, errorPos)
+}
+
+// trySkipAheadPositions attempts to decode at positions far ahead to test if corruption is localized
+func (consumer *StateSyncerConsumer) trySkipAheadPositions(file *os.File, errorPos int64) {
+	// Get file size
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return
+	}
+	fileSize := fileInfo.Size()
+	remaining := fileSize - errorPos
+
+	if remaining < 1024*1024 { // Less than 1MB remaining
+		return
+	}
+
+	glog.Infof("\n=== SKIP-AHEAD DIAGNOSTIC ===")
+	glog.Infof("Testing positions further ahead to check if corruption is localized...")
+	glog.Infof("Remaining file: %.2f MB", float64(remaining)/(1024*1024))
+
+	// Test positions at: +1MB, +10MB, +100MB, +500MB, +1GB
+	skipDistances := []int64{
+		1 * 1024 * 1024,    // 1 MB
+		10 * 1024 * 1024,   // 10 MB
+		100 * 1024 * 1024,  // 100 MB
+		500 * 1024 * 1024,  // 500 MB
+		1024 * 1024 * 1024, // 1 GB
+	}
+
+	for _, skipDist := range skipDistances {
+		testPos := errorPos + skipDist
+		if testPos >= fileSize {
+			continue
+		}
+
+		glog.Infof("\nTesting position +%.0f MB from error (position %d)...", float64(skipDist)/(1024*1024), testPos)
+
+		// Try to decode at this position
+		entry, success, entrySize, decodeErr := tryDecodeAtPosition(file, testPos)
+
+		if success && entry != nil {
+			glog.Infof("✓ Decode successful at skip-ahead position!")
+			glog.Infof("  Entry: EncoderType=%d, OpType=%d, Height=%d, Size=%d bytes",
+				entry.EncoderType, entry.OperationType, entry.BlockHeight, entrySize)
+
+			// Try reading a few entries forward
+			glog.Infof("  Attempting to read forward from this position...")
+			successfulReads := consumer.readForwardFromPosition(file, testPos, -1)
+			glog.Infof("  Forward reads: %d successful entries", successfulReads)
+
+			if successfulReads >= 10 {
+				glog.Infof("  ⭐ PROMISING POSITION! Consider manually setting consumer progress to %d", testPos)
+			}
+		} else {
+			glog.Infof("✗ Decode failed: %v", decodeErr)
+		}
+	}
+
+	glog.Infof("\n=== SKIP-AHEAD DIAGNOSTIC COMPLETE ===")
+
+	// Additional diagnostic: Analyze the bytes at error position
+	consumer.analyzeErrorBytes(file, errorPos)
+}
+
+// analyzeErrorBytes shows raw bytes at the error position to help identify misalignment patterns
+func (consumer *StateSyncerConsumer) analyzeErrorBytes(file *os.File, errorPos int64) {
+	glog.Infof("\n=== RAW BYTES ANALYSIS ===")
+	glog.Infof("Examining bytes at error position %d to identify patterns...", errorPos)
+
+	// Read 256 bytes starting from error position
+	file.Seek(errorPos, io.SeekStart)
+	byteBuf := make([]byte, 256)
+	n, err := file.Read(byteBuf)
+	if err != nil && err != io.EOF {
+		glog.Infof("Error reading bytes: %v", err)
+		return
+	}
+
+	if n > 0 {
+		// Show hex dump of first 64 bytes
+		glog.Infof("\nFirst 64 bytes at error position (hex):")
+		for i := 0; i < 64 && i < n; i += 16 {
+			end := i + 16
+			if end > n {
+				end = n
+			}
+			hexStr := ""
+			asciiStr := ""
+			for j := i; j < end; j++ {
+				hexStr += fmt.Sprintf("%02x ", byteBuf[j])
+				if byteBuf[j] >= 32 && byteBuf[j] < 127 {
+					asciiStr += string(byteBuf[j])
+				} else {
+					asciiStr += "."
+				}
+			}
+			glog.Infof("%08x: %-48s %s", errorPos+int64(i), hexStr, asciiStr)
+		}
+
+		// Try to decode the first few varints
+		glog.Infof("\nAttempting to decode varints from error position:")
+		reader := bytes.NewReader(byteBuf[:n])
+		for i := 0; i < 5; i++ {
+			pos := reader.Size() - int64(reader.Len())
+			val, err := binary.ReadUvarint(reader)
+			if err != nil {
+				glog.Infof("  Varint #%d at offset +%d: ERROR - %v", i+1, pos, err)
+				break
+			}
+			glog.Infof("  Varint #%d at offset +%d: %d (0x%x)", i+1, pos, val, val)
+		}
+	}
+
+	glog.Infof("\n=== RAW BYTES ANALYSIS COMPLETE ===")
 }
 
 // searchBackwardForValidEntry searches backward from errorPos to find a valid entry that can also be read forward
@@ -698,6 +865,9 @@ func (consumer *StateSyncerConsumer) readForwardFromPosition(file *os.File, star
 	consecutiveErrors := 0
 	maxConsecutiveErrors := 3
 
+	// Track encoder types that fail
+	failedEncoderTypes := make(map[uint64]int)
+
 	for consecutiveErrors < maxConsecutiveErrors {
 		currentPos, _ := file.Seek(0, io.SeekCurrent)
 
@@ -708,6 +878,28 @@ func (consumer *StateSyncerConsumer) readForwardFromPosition(file *os.File, star
 			consecutiveErrors++
 			if err != nil {
 				glog.Infof("Entry #%d at position %d: DECODE ERROR - %v", entryNum+1, currentPos, err)
+
+				// Track which encoder type failed
+				if entry != nil {
+					failedEncoderTypes[uint64(entry.EncoderType)]++
+				}
+
+				// Try to extract expected vs actual encoder type from error
+				if strings.Contains(err.Error(), "encoder type") && strings.Contains(err.Error(), "doesn't match") {
+					// Parse error like: "encoder type (121) doesn't match the entry type (18)"
+					errStr := err.Error()
+					if idx1 := strings.Index(errStr, "encoder type ("); idx1 >= 0 {
+						if idx2 := strings.Index(errStr[idx1:], ")"); idx2 >= 0 {
+							actualType := errStr[idx1+14 : idx1+idx2]
+							if idx3 := strings.Index(errStr, "entry type ("); idx3 >= 0 {
+								if idx4 := strings.Index(errStr[idx3:], ")"); idx4 >= 0 {
+									expectedType := errStr[idx3+12 : idx3+idx4]
+									glog.Infof("  → Expected EncoderType %s but read %s", expectedType, actualType)
+								}
+							}
+						}
+					}
+				}
 			}
 			continue
 		}
@@ -738,6 +930,14 @@ func (consumer *StateSyncerConsumer) readForwardFromPosition(file *os.File, star
 			glog.Infof("... (total of %d entries decoded, %d past error position)", entryNum, entriesCountedPastThreshold)
 		} else {
 			glog.Infof("... (total of %d successful entries decoded)", entryNum)
+		}
+	}
+
+	// Report which encoder types had issues
+	if len(failedEncoderTypes) > 0 {
+		glog.Infof("\nEncoder types that failed during forward read:")
+		for encType, count := range failedEncoderTypes {
+			glog.Infof("  EncoderType %d: %d failures", encType, count)
 		}
 	}
 
