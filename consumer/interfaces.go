@@ -23,5 +23,6 @@ type StateSyncerDataHandler interface {
 	InitiateTransaction() error
 	CommitTransaction() error
 	RollbackTransaction() error
+	HasActiveTransaction() bool
 	GetParams() *lib.DeSoParams
 }

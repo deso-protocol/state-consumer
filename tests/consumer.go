@@ -127,6 +127,11 @@ func (th *TestHandler) GetParams() *lib.DeSoParams {
 	return th.Params
 }
 
+func (th *TestHandler) HasActiveTransaction() bool {
+	// For testing, we don't track actual transactions, so always return false
+	return false
+}
+
 func CleanupConsumerTestEnvironment(apiServer *routes.APIServer, nodeServer *lib.Server, cancelFunc context.CancelFunc) {
 	cancelFunc()
 	nodeServer.Stop()

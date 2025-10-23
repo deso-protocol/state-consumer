@@ -294,17 +294,21 @@ func (consumer *StateSyncerConsumer) SyncCommittedEntry(stateChangeEntry *lib.St
 		// If we're executing transactions and this isn't the first block, commit the previous block's work
 		// before starting the new block.
 		if consumer.ExecuteTransactions && consumer.CurrentConfirmedEntryFlushId != uuid.Nil {
-			// Execute any remaining batched entries from the previous block.
-			if err := consumer.executeBatch(); err != nil {
-				return false, errors.Wrapf(err, "consumer.SyncCommittedEntry: Error executing batch before commit")
-			}
-			// Commit the transaction for the previous block.
-			if err := consumer.DataHandler.CommitTransaction(); err != nil {
-				return false, errors.Wrapf(err, "consumer.SyncCommittedEntry: Error committing transaction")
-			}
-			// Initiate a new transaction for the new block.
-			if err := consumer.DataHandler.InitiateTransaction(); err != nil {
-				return false, errors.Wrapf(err, "consumer.SyncCommittedEntry: Error initiating transaction")
+			// Only commit if there's actually a transaction active. This handles the case where
+			// blocksync starts mid-processing and ExecuteTransactions becomes true without a transaction.
+			if consumer.DataHandler.HasActiveTransaction() {
+				// Execute any remaining batched entries from the previous block.
+				if err := consumer.executeBatch(); err != nil {
+					return false, errors.Wrapf(err, "consumer.SyncCommittedEntry: Error executing batch before commit")
+				}
+				// Commit the transaction for the previous block.
+				if err := consumer.DataHandler.CommitTransaction(); err != nil {
+					return false, errors.Wrapf(err, "consumer.SyncCommittedEntry: Error committing transaction")
+				}
+				// Initiate a new transaction for the new block.
+				if err := consumer.DataHandler.InitiateTransaction(); err != nil {
+					return false, errors.Wrapf(err, "consumer.SyncCommittedEntry: Error initiating transaction")
+				}
 			}
 		}
 
