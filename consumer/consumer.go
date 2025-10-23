@@ -586,16 +586,23 @@ func (consumer *StateSyncerConsumer) watchFileAndScanOnWrite() (err error) {
 
 			// If we are executing transactions, initiate a new transaction.
 			// This should occur after hypersync is complete.
+			transactionInitiated := false
 			if consumer.ExecuteTransactions {
 				err = consumer.DataHandler.InitiateTransaction()
 				if err != nil {
 					return errors.Wrapf(err, "consumer.processNewEntriesInFile: Error initiating transaction")
 				}
+				transactionInitiated = true
 				defer func() {
-					// Call CommitTransaction and handle any potential error.
-					if commitErr := consumer.DataHandler.CommitTransaction(); commitErr != nil {
-						// If there's an error, wrap it with additional context and assign it to the named return variable.
-						err = fmt.Errorf("consumer.processNewEntriesInFile: error committing transaction: %w", commitErr)
+					// Only commit if we initiated a transaction and it hasn't been committed yet.
+					// The transaction may have been committed during block processing.
+					if transactionInitiated {
+						if commitErr := consumer.DataHandler.CommitTransaction(); commitErr != nil {
+							// Ignore "no transaction" errors since we may have committed during processing
+							if commitErr.Error() != "PostgresDataHandler.CommitTransaction: No transaction to commit" {
+								err = fmt.Errorf("consumer.processNewEntriesInFile: error committing transaction: %w", commitErr)
+							}
+						}
 					}
 				}()
 			}
